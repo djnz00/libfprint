@@ -321,6 +321,25 @@ foreach test_name: unit_tests
     )
 endforeach
 
+goodixtls_protocol_test = executable('test-goodixtls-protocol',
+    sources: [
+        'test-goodixtls-protocol.c',
+        meson.project_source_root() / 'libfprint/drivers/goodixtls/goodix_proto.c',
+    ],
+    dependencies: [
+        glib_dep,
+        gio_dep,
+    ],
+    include_directories: root_inc,
+    c_args: common_cflags,
+    install: false,
+)
+test('goodixtls-protocol',
+    goodixtls_protocol_test,
+    suite: ['unit-tests'],
+    env: envs,
+)
+
 # Run udev rule generator with fatal warnings
 envs.set('UDEV_HWDB', udev_hwdb.full_path())
 envs.set('UDEV_HWDB_CHECK_CONTENTS', default_drivers_are_enabled ? '1' : '0')

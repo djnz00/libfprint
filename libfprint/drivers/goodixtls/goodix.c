@@ -67,6 +67,7 @@ gchar *data_to_str(guint8 *data, guint32 length) {
   gchar *string = g_malloc((length * 2) + 1);
 
   for (guint32 i = 0; i < length; i++) sprintf(string + i * 2, "%02x", data[i]);
+  string[length * 2] = '\0';
 
   return string;
 }
@@ -81,7 +82,10 @@ void goodix_receive_done(FpDevice *dev, guint8 *data, guint16 length,
   GoodixCmdCallback callback = priv->callback;
   gpointer user_data = priv->user_data;
 
-  if (!(priv->ack || priv->reply)) return;
+  if (!(priv->ack || priv->reply)) {
+    g_clear_error(&error);
+    return;
+  }
 
   goodix_reset_state(dev);
   if (!error) fp_dbg("Completed command: 0x%02x", priv->cmd);
@@ -171,7 +175,7 @@ void goodix_receive_preset_psk_read(FpDevice *dev, guint8 *data, guint16 length,
     return;
   }
 
-  if (length < sizeof(guint8) + sizeof(GoodixPresetPsk)) {
+  if (length < sizeof(guint8) + sizeof(GoodixPresetPskResponse)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                 "Invalid preset PSK read reply length: %d", length);
     callback(dev, FALSE, 0x00000000, NULL, 0, cb_info->user_data, error);
@@ -180,7 +184,15 @@ void goodix_receive_preset_psk_read(FpDevice *dev, guint8 *data, guint16 length,
   
   GoodixPresetPskResponse* response =
       (GoodixPresetPskResponse*) (data + sizeof(guint8));
-  psk_len = response->length;
+  psk_len = GUINT32_FROM_LE(response->length);
+  if (psk_len > G_MAXUINT16) {
+    g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                "Invalid preset PSK read payload length: %" G_GUINT32_FORMAT,
+                psk_len);
+    callback(dev, FALSE, 0x00000000, NULL, 0, cb_info->user_data, error);
+    return;
+  }
+
   if (length < psk_len + sizeof(guint8) + sizeof(GoodixPresetPskResponse)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                 "Invalid preset PSK read reply length: %d", length);
@@ -289,9 +301,18 @@ void goodix_receive_protocol(FpDevice *dev, guint8 *data, guint32 length) {
 
   if (!goodix_decode_protocol(data, length, &cmd, &payload, &payload_len,
                               &valid_checksum, &valid_null_checksum)) {
-      fp_err("Incomplete, size: %d", length);
-      // Protocol is not full, we still need data.
-      // TODO implement protocol assembling.
+      g_autoptr(GError) error = NULL;
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Invalid Goodix protocol frame length: %d", length);
+      goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
+      return;
+  }
+
+  if (!valid_checksum && !valid_null_checksum) {
+      g_autoptr(GError) error = NULL;
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Invalid Goodix protocol checksum for command 0x%02x", cmd);
+      goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
       return;
   }
 
@@ -324,6 +345,17 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
   g_autofree guint8 *payload = NULL;
   guint16 payload_len;
   gboolean valid_checksum;  // TODO implement checksum.
+  guint32 max_pack_len = sizeof(GoodixPack) + sizeof(guint8) + G_MAXUINT16;
+
+  if (length > max_pack_len || priv->length > max_pack_len - length) {
+      g_autoptr(GError) error = NULL;
+      g_clear_pointer(&priv->data, g_free);
+      priv->length = 0;
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Goodix packet exceeds maximum length");
+      goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
+      return;
+  }
 
   priv->data = g_realloc(priv->data, priv->length + length);
   memcpy(priv->data + priv->length, data, length);
@@ -333,6 +365,16 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
                           &payload_len, &valid_checksum)) {
       // Packet is not full, we still need data.
       fp_dbg("not full packet");
+      return;
+  }
+
+  if (!valid_checksum) {
+      g_autoptr(GError) error = NULL;
+      g_clear_pointer(&priv->data, g_free);
+      priv->length = 0;
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Invalid Goodix packet checksum");
+      goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
       return;
   }
 
@@ -352,6 +394,13 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
 
     case GOODIX_FLAGS_TLS_DATA:
         fp_dbg("Got TLS data msg");
+        if (payload_len < 9) {
+            g_autoptr(GError) error = NULL;
+            g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                        "Invalid Goodix TLS data length: %d", payload_len);
+            goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
+            break;
+        }
         // GOODIX 52xd: Remove first 9 to get valid TLS content
         goodix_receive_done(dev, payload+9, payload_len-9, NULL);
         break;
@@ -373,15 +422,13 @@ void goodix_receive_data_cb(FpiUsbTransfer *transfer, FpDevice *dev,
 
     if (g_cancellable_is_cancelled(priv->transfer_cancel_tkn)) {
         fp_dbg("transfer cancelled, aborting read loop...");
+        priv->inited = FALSE;
         return;
     }
   if (error) {
-    // Warn about error and free it.
     fp_warn("Receive data error: %s", error->message);
-    g_error_free(error);
-
-    // Retry receiving data and return.
-    goodix_receive_data(dev);
+    priv->inited = FALSE;
+    goodix_receive_done(dev, NULL, 0, error);
     return;
   }
 
@@ -975,14 +1022,15 @@ void goodix_send_preset_psk_write(FpDevice *dev, guint32 flags, guint8 *psk,
     cb_info->user_data = user_data;
 
     goodix_send_protocol(dev, GOODIX_CMD_PRESET_PSK_WRITE, payload,
-                         sizeof(payload) + length, g_free, TRUE, GOODIX_TIMEOUT,
-                         TRUE, goodix_receive_preset_psk_write, cb_info);
+                         sizeof(GoodixPresetPsk) + length, g_free, TRUE,
+                         GOODIX_TIMEOUT, TRUE,
+                         goodix_receive_preset_psk_write, cb_info);
     return;
   }
 
   goodix_send_protocol(dev, GOODIX_CMD_PRESET_PSK_WRITE, payload,
-                       sizeof(payload) + length, g_free, TRUE, GOODIX_TIMEOUT,
-                       TRUE, NULL, NULL);
+                       sizeof(GoodixPresetPsk) + length, g_free, TRUE,
+                       GOODIX_TIMEOUT, TRUE, NULL, NULL);
 }
 
 void goodix_send_preset_psk_read(FpDevice *dev, guint32 flags, guint16 length,
@@ -1042,6 +1090,8 @@ void goodix_reset_state(FpDevice* dev)
 
     if (priv->timeout)
         g_clear_pointer(&priv->timeout, g_source_destroy);
+    g_clear_pointer(&priv->data, g_free);
+    priv->length = 0;
     priv->ack = FALSE;
     priv->reply = FALSE;
     priv->callback = NULL;
@@ -1055,8 +1105,12 @@ gboolean goodix_dev_deinit(FpDevice *dev, GError **error) {
       fpi_device_goodixtls_get_instance_private(self);
 
   if (priv->timeout) g_source_destroy(priv->timeout);
-  g_free(priv->data);
-  g_cancellable_cancel(priv->transfer_cancel_tkn);
+  g_clear_pointer(&priv->data, g_free);
+  priv->length = 0;
+  if (priv->transfer_cancel_tkn) {
+    g_cancellable_cancel(priv->transfer_cancel_tkn);
+    g_clear_object(&priv->transfer_cancel_tkn);
+  }
   goodix_shutdown_tls(dev, error);
 
   goodix_reset_state(dev);
@@ -1304,7 +1358,7 @@ static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,
     goodix_tls_client_send(priv->tls_hop, data, length);
 
     const guint16 size = 7684;
-    guint8* buff = malloc(size);
+    guint8* buff = g_malloc(size);
     GError* err = NULL;
     int read_size = goodix_tls_server_receive(priv->tls_hop, buff, size, &err);
     if (read_size <= 0) {

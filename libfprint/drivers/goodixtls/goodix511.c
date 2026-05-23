@@ -257,7 +257,7 @@ static void otp_write_run(FpiSsm* ssm, FpDevice* dev)
         dev, otp_write_addrs[fpi_ssm_get_cur_state(ssm)], data, check_none,
         ssm);
     if (fpi_ssm_get_cur_state(ssm) == OTP_WRITE_NUM - 1) {
-        free(self->otp);
+        g_clear_pointer(&self->otp, g_free);
     }
 }
 
@@ -271,12 +271,12 @@ static void read_otp_callback(FpDevice* dev, guint8* data, guint16 len,
     if (len < 64) {
         fpi_ssm_mark_failed(ssm, g_error_new(FP_DEVICE_ERROR,
                                              FP_DEVICE_ERROR_DATA_INVALID,
-                                             "OTP is invalid (len: %d)", 64));
+                                             "OTP is invalid (len: %d)", len));
         return;
     }
     FpiDeviceGoodixTls511* self = FPI_DEVICE_GOODIXTLS511(dev);
-    self->otp = malloc(len);
-    memcpy(self->otp, data, len);
+    g_free(self->otp);
+    self->otp = g_memdup2(data, 64);
     FpiSsm* otp_ssm = fpi_ssm_new(dev, otp_write_run, OTP_WRITE_NUM);
     fpi_ssm_start_subsm(ssm, otp_ssm);
 }
@@ -529,6 +529,15 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
         return;
     }
 
+    if (len < GOODIX511_RAW_FRAME_SIZE) {
+        fpi_ssm_mark_failed(ssm,
+                            g_error_new(FP_DEVICE_ERROR,
+                                        FP_DEVICE_ERROR_DATA_INVALID,
+                                        "Image frame is too short (got %d, expected %d)",
+                                        len, GOODIX511_RAW_FRAME_SIZE));
+        return;
+    }
+
     FpiDeviceGoodixTls511* self = FPI_DEVICE_GOODIXTLS511(dev);
     save_frame(self, data);
     if (g_slist_length(self->frames) <= GOODIX511_CAP_FRAMES) {
@@ -577,6 +586,14 @@ static void on_scan_empty_img(FpDevice* dev, guint8* data, guint16 length,
 {
     if (error) {
         fpi_ssm_mark_failed(ssm, error);
+        return;
+    }
+    if (length < GOODIX511_RAW_FRAME_SIZE) {
+        fpi_ssm_mark_failed(ssm,
+                            g_error_new(FP_DEVICE_ERROR,
+                                        FP_DEVICE_ERROR_DATA_INVALID,
+                                        "Empty image frame is too short (got %d, expected %d)",
+                                        length, GOODIX511_RAW_FRAME_SIZE));
         return;
     }
     FpiDeviceGoodixTls511* self = FPI_DEVICE_GOODIXTLS511(dev);
@@ -648,6 +665,7 @@ static void scan_complete(FpiSsm* ssm, FpDevice* dev, GError* error)
 {
     if (error) {
         fp_err("failed to scan: %s (code: %d)", error->message, error->code);
+        fpi_image_device_session_error(FP_IMAGE_DEVICE(dev), error);
         return;
     }
     fp_dbg("finished scan");
@@ -667,7 +685,7 @@ static void dev_init(FpImageDevice *img_dev) {
   FpDevice *dev = FP_DEVICE(img_dev);
   GError *error = NULL;
 
-  if (goodix_dev_init(dev, &error)) {
+  if (!goodix_dev_init(dev, &error)) {
     fpi_image_device_open_complete(img_dev, error);
     return;
   }
@@ -679,7 +697,7 @@ static void dev_deinit(FpImageDevice *img_dev) {
   FpDevice *dev = FP_DEVICE(img_dev);
   GError *error = NULL;
 
-  if (goodix_dev_deinit(dev, &error)) {
+  if (!goodix_dev_deinit(dev, &error)) {
     fpi_image_device_close_complete(img_dev, error);
     return;
   }

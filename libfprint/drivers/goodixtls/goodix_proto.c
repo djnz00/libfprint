@@ -23,17 +23,22 @@
 
 #include "goodix_proto.h"
 
-guint8 goodix_calc_checksum(guint8 *data, guint16 length) {
+guint8 goodix_calc_checksum(const guint8 *data, guint32 length) {
   guint8 checksum = 0;
 
-  for (guint16 i = 0; i < length; i++) checksum += data[i];
+  for (guint32 i = 0; i < length; i++) checksum += data[i];
 
   return checksum;
 }
 
-void goodix_encode_pack(guint8 flags, guint8 *payload, guint16 payload_len,
+void goodix_encode_pack(guint8 flags, const guint8 *payload, guint16 payload_len,
                         gboolean pad_data, guint8 **data, guint32 *data_len) {
   GoodixPack *pack;
+
+  g_return_if_fail(data != NULL);
+  g_return_if_fail(data_len != NULL);
+  g_return_if_fail(payload != NULL || payload_len == 0);
+
   *data_len = sizeof(GoodixPack) + sizeof(guint8) + payload_len;
 
   if (pad_data && *data_len % GOODIX_EP_OUT_MAX_BUF_SIZE)
@@ -47,13 +52,20 @@ void goodix_encode_pack(guint8 flags, guint8 *payload, guint16 payload_len,
   pack->length = GUINT16_TO_LE(payload_len);
   (*data)[sizeof(GoodixPack)] = goodix_calc_checksum(*data, sizeof(GoodixPack));
 
-  memcpy(*data + sizeof(GoodixPack) + sizeof(guint8), payload, payload_len);
+  if (payload_len)
+    memcpy(*data + sizeof(GoodixPack) + sizeof(guint8), payload, payload_len);
 }
 
-void goodix_encode_protocol(guint8 cmd, guint8 *payload, guint16 payload_len,
+void goodix_encode_protocol(guint8 cmd, const guint8 *payload, guint16 payload_len,
                             gboolean calc_checksum, gboolean pad_data,
                             guint8 **data, guint32 *data_len) {
   GoodixProtocol *protocol;
+
+  g_return_if_fail(data != NULL);
+  g_return_if_fail(data_len != NULL);
+  g_return_if_fail(payload != NULL || payload_len == 0);
+  g_return_if_fail(payload_len <= G_MAXUINT16 - sizeof(guint8));
+
   *data_len = sizeof(GoodixProtocol) + payload_len + sizeof(guint8);
 
   if (pad_data && *data_len % GOODIX_EP_OUT_MAX_BUF_SIZE)
@@ -66,7 +78,8 @@ void goodix_encode_protocol(guint8 cmd, guint8 *payload, guint16 payload_len,
   protocol->cmd = cmd;
   protocol->length = GUINT16_TO_LE(payload_len + sizeof(guint8));
 
-  memcpy(*data + sizeof(GoodixProtocol), payload, payload_len);
+  if (payload_len)
+    memcpy(*data + sizeof(GoodixProtocol), payload, payload_len);
 
   if (calc_checksum)
     (*data)[sizeof(GoodixProtocol) + payload_len] =
@@ -76,20 +89,29 @@ void goodix_encode_protocol(guint8 cmd, guint8 *payload, guint16 payload_len,
     (*data)[sizeof(GoodixProtocol) + payload_len] = GOODIX_NULL_CHECKSUM;
 }
 
-gboolean goodix_decode_pack(guint8 *data, guint32 data_len, guint8 *flags,
+gboolean goodix_decode_pack(const guint8 *data, guint32 data_len, guint8 *flags,
                             guint8 **payload, guint16 *payload_len,
                             gboolean *valid_checksum) {
-  GoodixPack *pack = (GoodixPack *)data;
+  const GoodixPack *pack = (const GoodixPack *)data;
   guint16 length;
+  guint32 required_len;
+
+  if (payload) *payload = NULL;
+  if (payload_len) *payload_len = 0;
+  if (valid_checksum) *valid_checksum = FALSE;
+
+  if (!data || !flags || !payload || !payload_len || !valid_checksum)
+    return FALSE;
 
   if (data_len < sizeof(GoodixPack) + sizeof(guint8)) return FALSE;
 
   length = GUINT16_FROM_LE(pack->length);
+  required_len = sizeof(GoodixPack) + sizeof(guint8) + length;
 
-  if (data_len < length + sizeof(GoodixPack) + sizeof(guint8)) return FALSE;
+  if (data_len < required_len) return FALSE;
 
   *flags = pack->flags;
-  *payload = g_memdup(data + sizeof(GoodixPack) + sizeof(guint8), length);
+  *payload = length ? g_memdup2(data + sizeof(GoodixPack) + sizeof(guint8), length) : NULL;
   *payload_len = length;
   *valid_checksum = goodix_calc_checksum(data, sizeof(GoodixPack)) ==
                     data[sizeof(GoodixPack)];
@@ -97,21 +119,37 @@ gboolean goodix_decode_pack(guint8 *data, guint32 data_len, guint8 *flags,
   return TRUE;
 }
 
-gboolean goodix_decode_protocol(guint8 *data, guint32 data_len, guint8 *cmd,
+gboolean goodix_decode_protocol(const guint8 *data, guint32 data_len, guint8 *cmd,
                                 guint8 **payload, guint16 *payload_len,
                                 gboolean *valid_checksum,
                                 gboolean *valid_null_checksum) {
-  GoodixProtocol *protocol = (GoodixProtocol *)data;
+  const GoodixProtocol *protocol = (const GoodixProtocol *)data;
+  guint16 encoded_length;
   guint16 length;
+  guint32 required_len;
+
+  if (payload) *payload = NULL;
+  if (payload_len) *payload_len = 0;
+  if (valid_checksum) *valid_checksum = FALSE;
+  if (valid_null_checksum) *valid_null_checksum = FALSE;
+
+  if (!data || !cmd || !payload || !payload_len || !valid_checksum ||
+      !valid_null_checksum)
+    return FALSE;
 
   if (data_len < sizeof(GoodixProtocol) + sizeof(guint8)) return FALSE;
 
-  length = GUINT16_FROM_LE(protocol->length) - sizeof(guint8);
+  encoded_length = GUINT16_FROM_LE(protocol->length);
+  if (encoded_length < sizeof(guint8))
+    return FALSE;
 
-  if (data_len < length + sizeof(GoodixProtocol) + sizeof(guint8)) return FALSE;
+  length = encoded_length - sizeof(guint8);
+  required_len = sizeof(GoodixProtocol) + encoded_length;
+
+  if (data_len < required_len) return FALSE;
 
   *cmd = protocol->cmd;
-  *payload = g_memdup(data + sizeof(GoodixProtocol), length);
+  *payload = length ? g_memdup2(data + sizeof(GoodixProtocol), length) : NULL;
   *payload_len = length;
   *valid_checksum =
       0xaa - goodix_calc_checksum(data, sizeof(GoodixProtocol) + length) ==
