@@ -1,6 +1,6 @@
 ## Summary
 
-Research conducted on 2026-05-23 for the `libfprint` checkout on branch `unstable`. No `source.yaml` was present in this repository, so this report uses a fresh repository source inventory of C, C++, Python, Meson, documentation, test fixture, and data files. The project is a Meson-built fingerprint library exposing public `FpContext`, `FpDevice`, `FpPrint`, `FpImage`, and image-device APIs while maintaining internal `fpi_*` driver APIs. The tree contains the core library in `libfprint/`, hardware drivers in `libfprint/drivers/`, NBIS minutiae/matching code in `libfprint/nbis/`, tests in `tests/`, examples in `examples/`, GTK demo code in `demo/`, and generated udev data helpers in `data/`.
+Research conducted on 2026-05-23 and refreshed for the `libfprint` checkout on branch `stabilize-goodix-interoperability`. No `source.yaml` was present in this repository, so this report uses a fresh repository source inventory of C, C++, Python, Meson, documentation, test fixture, and data files. This branch contains the Infinytum Goodix `unstable` codebase, freedesktop `master` fixes through `d79f15728208`, and the phase 1-7 Goodix stabilization work. The project is a Meson-built fingerprint library exposing public `FpContext`, `FpDevice`, `FpPrint`, `FpImage`, and image-device APIs while maintaining internal `fpi_*` driver APIs. The tree contains the core library in `libfprint/`, hardware drivers in `libfprint/drivers/`, NBIS minutiae/matching code in `libfprint/nbis/`, tests in `tests/`, examples in `examples/`, GTK demo code in `demo/`, and generated udev data helpers in `data/`.
 
 ## Coding style and conventions
 
@@ -10,7 +10,7 @@ The top-level Meson project sets C standard `gnu99`, debug-optimized defaults, a
 
 ### Build system and driver selection
 
-The root build defines dependencies, supported driver names, helper groups, and subdirectories (`meson.build:85`, `meson.build:126`, `meson.build:314`). Driver selection is controlled by the `drivers` Meson option (`meson_options.txt:1`). Goodix TLS drivers are part of the default driver list as `goodixtls511`, `goodixtls52xd`, and `goodixtls53xd` (`meson.build:126`). Their helper dependency group pulls in OpenSSL and threads (`meson.build:220`). The library build maps driver names to source files and shared helper files (`libfprint/meson.build:142`, `libfprint/meson.build:157`), then builds private, driver, and shared library targets (`libfprint/meson.build:255`, `libfprint/meson.build:264`, `libfprint/meson.build:274`).
+The root build defines dependencies, supported driver names, helper groups, and subdirectories. Driver selection is controlled by the `drivers` Meson option (`meson_options.txt:1`). Goodix TLS drivers are part of the default driver list as `goodixtls511`, `goodixtls52xd`, and `goodixtls53xd`. Their helper dependency group pulls in OpenSSL `>= 3.0` and threads. The library build maps driver names to source files and shared helper files, then builds private, driver, and shared library targets.
 
 ### Public library layer
 
@@ -46,4 +46,4 @@ The project is layered around a public GObject API, an internal driver API, and 
 ## Open Questions
 
 - `source.yaml` was not present, so no definitive manifest of intended research files was available.
-- This report documents the current checkout and does not distinguish fork-specific Goodix changes from upstream libfprint history.
+- This report documents the stabilization branch after the freedesktop merge; use `upstream-sync.md` in the workspace root for the detailed fork/upstream comparison.
