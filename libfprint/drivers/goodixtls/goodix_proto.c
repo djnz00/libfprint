@@ -152,7 +152,8 @@ gboolean goodix_decode_protocol(const guint8 *data, guint32 data_len, guint8 *cm
   *payload = length ? g_memdup2(data + sizeof(GoodixProtocol), length) : NULL;
   *payload_len = length;
   *valid_checksum =
-      0xaa - goodix_calc_checksum(data, sizeof(GoodixProtocol) + length) ==
+      (guint8)(0xaa - goodix_calc_checksum(data,
+                                           sizeof(GoodixProtocol) + length)) ==
       data[sizeof(GoodixProtocol) + length];
   *valid_null_checksum =
       GOODIX_NULL_CHECKSUM == data[sizeof(GoodixProtocol) + length];

@@ -58,6 +58,8 @@ struct _FpiDeviceGoodixTls52XD {
   FpiDeviceGoodixTls parent;
 
   guint8* otp;
+  const guint8* expected_pmk_hash;
+  guint16 expected_pmk_hash_len;
 
   GSList* frames;
 
@@ -97,15 +99,26 @@ static void check_none(FpDevice *dev, gpointer user_data, GError *error) {
 static gboolean
 goodix52xd_firmware_supported (const gchar *firmware)
 {
-  static const gchar *supported_firmware[] = {
-    GOODIX_52XD_FIRMWARE_VERSION,
-    "GFUSB_GM168SEC_APP_10034",
-  };
+  return (g_strcmp0 (firmware, GOODIX_52XD_FIRMWARE_VERSION) == 0 ||
+          g_strcmp0 (firmware, "GFUSB_GM168SEC_APP_10034") == 0);
+}
 
-  for (guint i = 0; i < G_N_ELEMENTS (supported_firmware); i++)
+static gboolean
+goodix52xd_set_expected_pmk_hash (FpiDeviceGoodixTls52XD *self,
+                                  const gchar            *firmware)
+{
+  if (g_strcmp0 (firmware, "GFUSB_GM168SEC_APP_10034") == 0)
     {
-      if (g_strcmp0 (firmware, supported_firmware[i]) == 0)
-        return TRUE;
+      self->expected_pmk_hash = goodix_52xd_pmk_hash_10034;
+      self->expected_pmk_hash_len = sizeof (goodix_52xd_pmk_hash_10034);
+      return TRUE;
+    }
+
+  if (g_strcmp0 (firmware, GOODIX_52XD_FIRMWARE_VERSION) == 0)
+    {
+      self->expected_pmk_hash = goodix_52xd_pmk_hash_10019;
+      self->expected_pmk_hash_len = sizeof (goodix_52xd_pmk_hash_10019);
+      return TRUE;
     }
 
   return FALSE;
@@ -126,6 +139,8 @@ static void check_firmware_version(FpDevice *dev, gchar *firmware,
     fpi_ssm_mark_failed(user_data, error);
     return;
   }
+
+  goodix52xd_set_expected_pmk_hash(FPI_DEVICE_GOODIXTLS52XD(dev), firmware);
 
   fpi_ssm_next_state(user_data);
 }
@@ -159,7 +174,7 @@ static void check_reset(FpDevice *dev, gboolean success, guint16 number,
 static void check_preset_psk_read(FpDevice *dev, gboolean success,
                                   guint32 flags, guint8 *psk, guint16 length,
                                   gpointer user_data, GError *error) {
-  g_autofree gchar *psk_str = data_to_str(psk, length);
+  FpiDeviceGoodixTls52XD *self = FPI_DEVICE_GOODIXTLS52XD(dev);
 
   if (error) {
     fpi_ssm_mark_failed(user_data, error);
@@ -173,8 +188,8 @@ static void check_preset_psk_read(FpDevice *dev, gboolean success,
     return;
   }
 
-  fp_dbg("Device PSK: 0x%s", psk_str);
   fp_dbg("Device PSK flags: 0x%08x", flags);
+  fp_dbg("Device PSK hash length: %d", length);
 
   if (flags != GOODIX_52XD_PSK_FLAGS) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
@@ -183,16 +198,17 @@ static void check_preset_psk_read(FpDevice *dev, gboolean success,
     return;
   }
 
-  if (length != sizeof(goodix_52xd_psk_0)) {
+  if (!self->expected_pmk_hash ||
+      length != self->expected_pmk_hash_len) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                "Invalid device PSK: 0x%s", psk_str);
+                "Invalid device PSK hash length: %d", length);
     fpi_ssm_mark_failed(user_data, error);
     return;
   }
 
-  if (memcmp(psk, goodix_52xd_psk_0, sizeof(goodix_52xd_psk_0))) {
+  if (memcmp(psk, self->expected_pmk_hash, self->expected_pmk_hash_len)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                "Invalid device PSK: 0x%s", psk_str);
+                "Unsupported device PSK hash");
     fpi_ssm_mark_failed(user_data, error);
     return;
   }

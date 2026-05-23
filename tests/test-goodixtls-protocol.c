@@ -124,6 +124,27 @@ test_decode_protocol_valid_null_checksum (void)
 }
 
 static void
+test_decode_protocol_valid_wrapped_checksum (void)
+{
+  const guint8 encoded[] = { GOODIX_CMD_RESET, 0x04, 0x00, 0x01, 0x00, 0x08,
+                             0xfb };
+  g_autofree guint8 *payload = NULL;
+  guint16 payload_len = 0;
+  guint8 cmd = 0;
+  gboolean valid_checksum = FALSE;
+  gboolean valid_null_checksum = TRUE;
+
+  g_assert_true (goodix_decode_protocol (encoded, sizeof (encoded), &cmd,
+                                         &payload, &payload_len,
+                                         &valid_checksum,
+                                         &valid_null_checksum));
+  g_assert_cmpint (cmd, ==, GOODIX_CMD_RESET);
+  g_assert_cmpuint (payload_len, ==, 3);
+  g_assert_true (valid_checksum);
+  g_assert_false (valid_null_checksum);
+}
+
+static void
 test_decode_protocol_rejects_zero_length_field (void)
 {
   guint8 encoded[] = { GOODIX_CMD_NOP, 0x00, 0x00, 0x00 };
@@ -206,6 +227,8 @@ main (int argc, char *argv[])
                    test_decode_protocol_valid_checksum);
   g_test_add_func ("/goodixtls/protocol/decode-protocol-valid-null-checksum",
                    test_decode_protocol_valid_null_checksum);
+  g_test_add_func ("/goodixtls/protocol/decode-protocol-valid-wrapped-checksum",
+                   test_decode_protocol_valid_wrapped_checksum);
   g_test_add_func ("/goodixtls/protocol/decode-protocol-zero-length-field",
                    test_decode_protocol_rejects_zero_length_field);
   g_test_add_func ("/goodixtls/protocol/decode-protocol-short-payload",
