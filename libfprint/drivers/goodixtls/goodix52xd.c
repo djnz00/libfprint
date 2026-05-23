@@ -579,7 +579,7 @@ static void scan_empty_run(FpiSsm* ssm, FpDevice* dev)
         FpImageDevice* img_dev = FP_IMAGE_DEVICE(dev);
         FpiDeviceGoodixTls52XD* self = FPI_DEVICE_GOODIXTLS52XD(img_dev);
         guint8 payload[] = {0x43, 0x03, self->otp[26] + 6, 0x00, self->otp[26], 0x00, self->otp[45] + 6, 0x00, self->otp[45], 0x00};
-        goodix_tls_read_image(dev, &payload, sizeof(payload), on_scan_empty_img, ssm);
+        goodix_tls_read_image(dev, payload, sizeof(payload), on_scan_empty_img, ssm);
         break;
     }
     }
@@ -595,7 +595,7 @@ static void scan_get_img(FpDevice* dev, FpiSsm* ssm)
     FpImageDevice* img_dev = FP_IMAGE_DEVICE(dev);
     FpiDeviceGoodixTls52XD* self = FPI_DEVICE_GOODIXTLS52XD(img_dev);
     guint8 payload[] = {0x43, 0x03, self->otp[26] + 6, 0x00, self->otp[26], 0x00, self->otp[45] + 6, 0x00, self->otp[45], 0x00};
-    goodix_tls_read_image(dev, &payload, sizeof(payload), scan_on_read_img, ssm);
+    goodix_tls_read_image(dev, payload, sizeof(payload), scan_on_read_img, ssm);
 }
 
 const guint8 fdt_switch_state_mode_52xd[] = {
@@ -650,7 +650,7 @@ static void scan_run_state(FpiSsm* ssm, FpDevice* dev)
         break;
     case SCAN_STAGE_GET_IMG:
         fpi_image_device_report_finger_status(img_dev, TRUE);
-        guint16 payload = {0x05, 0x03};
+        guint16 payload = 0x0305;
         goodix_send_write_sensor_register(dev, 556, payload, write_sensor_complete, ssm);
         break;
     }

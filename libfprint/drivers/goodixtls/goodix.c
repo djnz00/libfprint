@@ -178,7 +178,8 @@ void goodix_receive_preset_psk_read(FpDevice *dev, guint8 *data, guint16 length,
     return;
   }
   
-  GoodixPresetPskResponse* response = data + sizeof(guint8);
+  GoodixPresetPskResponse* response =
+      (GoodixPresetPskResponse*) (data + sizeof(guint8));
   psk_len = response->length;
   if (length < psk_len + sizeof(guint8) + sizeof(GoodixPresetPskResponse)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
@@ -932,7 +933,7 @@ void goodix_send_tls_successfully_established(FpDevice *dev,
 void goodix_send_read_otp(FpDevice* dev, GoodixDefaultCallback callback,
                           gpointer user_data)
 {
-    guint8 payload = {0x40, 0x00};
+    guint8 payload[] = {0x40, 0x00};
     GoodixCallbackInfo* cb_info;
 
     if (callback) {
@@ -1302,12 +1303,13 @@ static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,
         fpi_device_goodixtls_get_instance_private(self);
     goodix_tls_client_send(priv->tls_hop, data, length);
 
-    const guint16 size = -1;
+    const guint16 size = 7684;
     guint8* buff = malloc(size);
     GError* err = NULL;
     int read_size = goodix_tls_server_receive(priv->tls_hop, buff, size, &err);
     if (read_size <= 0) {
         callback(dev, NULL, 0, cb_info->user_data, err);
+        g_free(buff);
         g_free(cb_info);
         return;
     }
