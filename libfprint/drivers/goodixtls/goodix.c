@@ -323,7 +323,17 @@ void goodix_receive_protocol(FpDevice *dev, guint8 *data, guint32 length) {
   }
 
   if (priv->cmd != cmd) {
-    fp_warn("Invalid protocol command: 0x%02x", cmd);
+    g_autoptr(GError) error = NULL;
+
+    if (cmd == GOODIX_CMD_REQUEST_TLS_CONNECTION &&
+        priv->cmd == GOODIX_CMD_MCU_GET_IMAGE)
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Device requested TLS renegotiation while waiting for image data");
+    else
+      g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                  "Unexpected Goodix protocol command 0x%02x while waiting for 0x%02x",
+                  cmd, priv->cmd);
+    goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
     return;
   }
 
@@ -1200,13 +1210,19 @@ static void on_tls_successfully_established(FpDevice* dev, gpointer user_data,
     FpiDeviceGoodixTlsPrivate* priv =
         fpi_device_goodixtls_get_instance_private(self);
     ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
-        dev, priv->tls_ready_callback->user_data, NULL);
+        dev, priv->tls_ready_callback->user_data, error);
 }
 static void tls_handshake_done(FpiSsm* ssm, FpDevice* dev, GError* error)
 {
     if (error) {
         fp_dbg("failed to do tls handshake: %s (code: %d)", error->message,
                error->code);
+        FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(dev);
+        FpiDeviceGoodixTlsPrivate* priv =
+            fpi_device_goodixtls_get_instance_private(self);
+        ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
+            dev, priv->tls_ready_callback->user_data, error);
+        return;
     }
     goodix_send_tls_successfully_established(
         dev, on_tls_successfully_established, NULL);
@@ -1256,6 +1272,13 @@ static void tls_handshake_run(FpiSsm* ssm, FpDevice* dev)
             fpi_ssm_mark_failed(ssm, err);
             return;
         }
+        if (size >= 2 && buff[0] == 0x15) {
+            fpi_ssm_mark_failed(
+                ssm,
+                g_error_new_literal(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "TLS server rejected device handshake"));
+            return;
+        }
         fpi_ssm_next_state(ssm);
     }
 }
@@ -1272,7 +1295,11 @@ static void on_goodix_request_tls_connection(FpDevice* dev, guint8* data,
 {
     if (error) {
         fp_err("failed to get tls handshake: %s", error->message);
-        goodix_send_tls_successfully_established(FP_DEVICE(dev), NULL, NULL);
+        FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(user_data);
+        FpiDeviceGoodixTlsPrivate* priv =
+            fpi_device_goodixtls_get_instance_private(self);
+        ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
+            dev, priv->tls_ready_callback->user_data, error);
         return;
     }
     FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(user_data);
@@ -1320,6 +1347,9 @@ void goodix_tls(FpDevice* dev, GoodixNoneCallback callback, gpointer user_data)
     if (!goodix_tls_server_init(priv->tls_hop, &err)) {
         fp_err("failed to init tls server, error: %s, code: %d", err->message,
                err->code);
+        g_clear_pointer(&priv->tls_hop, g_free);
+        ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
+            dev, priv->tls_ready_callback->user_data, err);
         return;
     }
 

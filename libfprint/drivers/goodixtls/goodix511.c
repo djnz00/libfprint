@@ -338,6 +338,7 @@ static void tls_activation_complete(FpDevice* dev, gpointer user_data,
 {
     if (error) {
         fp_err("failed to complete tls activation: %s", error->message);
+        fpi_image_device_activate_complete(FP_IMAGE_DEVICE(dev), error);
         return;
     }
     FpImageDevice* image_dev = FP_IMAGE_DEVICE(dev);

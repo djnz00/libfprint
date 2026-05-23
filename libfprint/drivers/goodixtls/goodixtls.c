@@ -19,6 +19,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <gio/gio.h>
 #include <glib.h>
 #include <netinet/in.h>
 #include <openssl/crypto.h>
@@ -40,13 +41,10 @@
 
 static GError* err_from_ssl(void)
 {
-    GError* err = malloc(sizeof(GError));
     unsigned long code = ERR_get_error();
-    err->code = code;
     const char* msg = ERR_reason_error_string(code);
-    err->message = malloc(strlen(msg) + 1);
-    strcpy(err->message, msg);
-    return err;
+    return g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED,
+                               msg ? msg : "TLS operation failed");
 }
 
 static unsigned int tls_server_psk_server_callback(SSL *ssl,
@@ -156,26 +154,34 @@ gboolean goodix_tls_server_init(GoodixTlsServer* self, GError** error)
     OpenSSL_add_ssl_algorithms();
     SSL_library_init();
     self->ssl_ctx = tls_server_create_ctx();
+    if (self->ssl_ctx == NULL) {
+        fp_dbg("Unable to create TLS server context\n");
+        *error = fpi_device_error_new_msg(FP_DEVICE_ERROR_GENERAL,
+                                          "Unable to create TLS server context");
+        return FALSE;
+    }
     tls_server_config_ctx(self->ssl_ctx);
 
     int socks[2] = {0, 0};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, socks) != 0) {
         g_set_error(error, G_FILE_ERROR, errno,
                     "failed to create socket pair: %s", strerror(errno));
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
         return FALSE;
     }
     self->sock_fd = socks[0];
     self->client_fd = socks[1];
 
-    if (self->ssl_ctx == NULL) {
-        fp_dbg("Unable to create TLS server context\n");
-        *error = fpi_device_error_new_msg(FP_DEVICE_ERROR_GENERAL, "Unable to "
-                                                                   "create TLS "
-                                                                   "server "
-                                                                   "context");
+    self->ssl_layer = SSL_new(self->ssl_ctx);
+    if (self->ssl_layer == NULL) {
+        *error = err_from_ssl();
+        close(self->client_fd);
+        close(self->sock_fd);
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
         return FALSE;
     }
-    self->ssl_layer = SSL_new(self->ssl_ctx);
     tls_config_ssl(self->ssl_layer);
     SSL_set_fd(self->ssl_layer, self->sock_fd);
 
