@@ -94,6 +94,23 @@ static void check_none(FpDevice *dev, gpointer user_data, GError *error) {
   fpi_ssm_next_state(user_data);
 }
 
+static gboolean
+goodix52xd_firmware_supported (const gchar *firmware)
+{
+  static const gchar *supported_firmware[] = {
+    GOODIX_52XD_FIRMWARE_VERSION,
+    "GFUSB_GM168SEC_APP_10034",
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (supported_firmware); i++)
+    {
+      if (g_strcmp0 (firmware, supported_firmware[i]) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 static void check_firmware_version(FpDevice *dev, gchar *firmware,
                                    gpointer user_data, GError *error) {
   if (error) {
@@ -103,7 +120,7 @@ static void check_firmware_version(FpDevice *dev, gchar *firmware,
 
   fp_dbg("Device firmware: \"%s\"", firmware);
 
-  if (strcmp(firmware, GOODIX_52XD_FIRMWARE_VERSION)) {
+  if (!goodix52xd_firmware_supported(firmware)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                 "Invalid device firmware: \"%s\"", firmware);
     fpi_ssm_mark_failed(user_data, error);
