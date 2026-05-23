@@ -1,8 +1,14 @@
 #!/usr/bin/python3
 
+import traceback
+import sys
 import gi
+
 gi.require_version('FPrint', '2.0')
 from gi.repository import FPrint, GLib
+
+# Exit with error on any exception, included those happening in async callbacks
+sys.excepthook = lambda *args: (traceback.print_exception(*args), sys.exit(1))
 
 ctx = GLib.main_context_default()
 
@@ -21,14 +27,17 @@ assert d.has_feature(FPrint.DeviceFeature.DUPLICATES_CHECK)
 assert d.has_feature(FPrint.DeviceFeature.STORAGE)
 assert d.has_feature(FPrint.DeviceFeature.STORAGE_LIST)
 assert d.has_feature(FPrint.DeviceFeature.STORAGE_DELETE)
-assert not d.has_feature(FPrint.DeviceFeature.STORAGE_CLEAR)
+assert d.has_feature(FPrint.DeviceFeature.STORAGE_CLEAR)
 
 d.open_sync()
+
+# 1. verify clear storage command, 2. make sure later asserts are good
+d.clear_storage_sync()
 
 template = FPrint.Print.new(d)
 
 def enroll_progress(*args):
-    assert d.get_finger_status() == FPrint.FingerStatusFlags.NEEDED
+    assert d.get_finger_status() & FPrint.FingerStatusFlags.NEEDED
     print('enroll progress: ' + str(args))
 
 def identify_done(dev, res):
@@ -44,17 +53,20 @@ assert d.get_finger_status() == FPrint.FingerStatusFlags.NONE
 p = d.enroll_sync(template, None, enroll_progress, None)
 assert d.get_finger_status() == FPrint.FingerStatusFlags.NONE
 print("enroll done")
+assert p.get_description() == 'FP1-00000000-0-00000000-nobody'
 
 print("listing")
 stored = d.list_prints_sync()
 print("listing done")
 assert len(stored) == 1
 assert stored[0].equal(p)
+assert stored[0].get_description() == 'FP1-00000000-0-00000000-nobody'
 print("verifying")
 assert d.get_finger_status() == FPrint.FingerStatusFlags.NONE
 verify_res, verify_print = d.verify_sync(p)
 assert d.get_finger_status() == FPrint.FingerStatusFlags.NONE
 print("verify done")
+assert verify_print.get_description() == 'FP1-00000000-0-00000000-nobody'
 del p
 assert verify_res == True
 

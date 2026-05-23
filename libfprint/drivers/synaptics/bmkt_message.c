@@ -256,7 +256,8 @@ bmkt_compose_message (uint8_t *cmd, int *cmd_len, uint8_t msg_id, uint8_t seq_nu
   cmd[BMKT_MESSAGE_SEQ_NUM_FIELD] = seq_num;
   cmd[BMKT_MESSAGE_ID_FIELD] = msg_id;
   cmd[BMKT_MESSAGE_PAYLOAD_LEN_FIELD] = payload_size;
-  memcpy (&cmd[BMKT_MESSAGE_PAYLOAD_FIELD], payload, payload_size);
+  if (payload_size > 0)
+    memcpy (&cmd[BMKT_MESSAGE_PAYLOAD_FIELD], payload, payload_size);
 
   *cmd_len = message_len;
 

@@ -22,6 +22,9 @@ except Exception as e:
 
 FPrint = None
 
+# Exit with error on any exception, included those happening in async callbacks
+sys.excepthook = lambda *args: (traceback.print_exception(*args), sys.exit(1))
+
 ctx = GLib.main_context_default()
 
 
@@ -56,6 +59,17 @@ class GLibErrorMessage:
 
 class VirtualDeviceBase(unittest.TestCase):
 
+    DEFAULT_ENROLL_STEPS = 5
+    USE_CLASS_DEVICE = True
+
+    @classmethod
+    def get_device(cls, ctx):
+        for dev in ctx.get_devices():
+            # We might have a USB device in the test system that needs skipping
+            if dev.get_driver() == cls._driver_name:
+                return dev
+        return None
+
     @classmethod
     def setUpClass(cls):
         unittest.TestCase.setUpClass()
@@ -70,26 +84,28 @@ class VirtualDeviceBase(unittest.TestCase):
         cls.sockaddr = os.path.join(cls.tmpdir, '{}.socket'.format(sock_name))
         os.environ['FP_{}'.format(driver_name.upper())] = cls.sockaddr
 
-        cls.ctx = FPrint.Context()
+        cls._driver_name = driver_name
 
-        cls.dev = None
-        for dev in cls.ctx.get_devices():
-            # We might have a USB device in the test system that needs skipping
-            if dev.get_driver() == driver_name:
-                cls.dev = dev
-                break
-
-        assert cls.dev is not None, "You need to compile with {} for testing".format(driver_name)
+        if cls.USE_CLASS_DEVICE:
+            cls.ctx = FPrint.Context()
+            cls.dev = cls.get_device(cls.ctx)
+            assert cls.dev is not None, "You need to compile with {} for testing".format(
+                driver_name)
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmpdir)
-        del cls.dev
-        del cls.ctx
+        if cls.USE_CLASS_DEVICE:
+            del cls.dev
+            del cls.ctx
         unittest.TestCase.tearDownClass()
 
     def setUp(self):
         super().setUp()
+        if not self.USE_CLASS_DEVICE:
+            self.ctx = FPrint.Context()
+            self.dev = self.get_device(self.ctx)
+            self.assertIsNotNone(self.dev)
         self._close_on_teardown = True
         self.assertFalse(self.dev.is_open())
         self.dev.open_sync()
@@ -98,8 +114,13 @@ class VirtualDeviceBase(unittest.TestCase):
     def tearDown(self):
         if self._close_on_teardown:
             self.assertTrue(self.dev.is_open())
+            self.set_keep_alive(False)
+            self.send_command('SET_ENROLL_STAGES', self.DEFAULT_ENROLL_STEPS)
             self.dev.close_sync()
         self.assertFalse(self.dev.is_open())
+        if not self.USE_CLASS_DEVICE:
+            del self.dev
+            del self.ctx
         super().tearDown()
 
     def wait_timeout(self, interval):
@@ -235,10 +256,11 @@ class VirtualDeviceBase(unittest.TestCase):
         self.assertEqual(self.dev.get_finger_status(), FPrint.FingerStatusFlags.NONE)
 
         self.assertEqual(self._enrolled.get_device_stored(),
-            self.dev.has_storage())
+            bool(self.dev.get_features() & FPrint.DeviceFeature.STORAGE))
         self.assertEqual(self._enrolled.props.driver, self.dev.get_driver())
         self.assertEqual(self._enrolled.props.device_id, self.dev.get_device_id())
-        self.assertEqual(self._enrolled.props.device_stored, self.dev.has_storage())
+        self.assertEqual(self._enrolled.props.device_stored,
+                         bool(self.dev.get_features() & FPrint.DeviceFeature.STORAGE))
         self.assertEqual(self._enrolled.props.fpi_data.unpack(), nick)
         self.assertIsNone(self._enrolled.props.image)
 
@@ -322,8 +344,110 @@ class VirtualDeviceBase(unittest.TestCase):
             else:
                 self.assertFalse(match)
 
-        if isinstance(scan_nick, str) and not self.dev.has_storage():
+        if (isinstance(scan_nick, str) and not
+            self.dev.get_features() & FPrint.DeviceFeature.STORAGE):
             self.assertEqual(self._verify_fp.props.fpi_data.get_string(), scan_nick)
+
+
+class VirtualDeviceUnplugging(VirtualDeviceBase):
+
+    driver_name = 'virtual_device'
+    USE_CLASS_DEVICE = False
+
+    def test_device_unplug(self):
+        self._close_on_teardown = False
+        notified_spec = None
+        def on_removed_notify(dev, spec):
+            nonlocal notified_spec
+            notified_spec = spec
+
+        removed = False
+        ctx_removed = False
+
+        def on_ctx_removed(ctx, dev):
+            nonlocal ctx_removed
+            ctx_removed = dev == self.dev
+            self.assertEqual(removed, ctx_removed)
+
+        def on_removed(dev):
+            nonlocal removed
+            removed = dev.props.removed
+            self.assertNotEqual(removed, ctx_removed)
+
+        self.assertFalse(self.dev.props.removed)
+
+        self.dev.connect('notify::removed', on_removed_notify)
+        self.ctx.connect('device-removed', on_ctx_removed)
+        self.dev.connect('removed', on_removed)
+        self.send_command('UNPLUG')
+        self.assertEqual(notified_spec.name, 'removed')
+        self.assertTrue(self.dev.props.removed)
+        self.assertIn(self.dev, self.ctx.get_devices())
+        self.assertTrue(removed)
+
+        with self.assertRaises(GLib.GError) as error:
+            self.dev.close_sync()
+        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
+                                                FPrint.DeviceError.REMOVED))
+
+        while not ctx_removed:
+            ctx.iteration(True)
+
+        self.assertNotIn(self.dev, self.ctx.get_devices())
+
+    def test_device_unplug_during_verify(self):
+        self._close_on_teardown = False
+        self._destroy_on_teardown = True
+
+        notified_spec = None
+        def on_removed_notify(dev, spec):
+            nonlocal notified_spec
+            notified_spec = spec
+
+        removed = False
+        ctx_removed = False
+
+        def on_ctx_removed(ctx, dev):
+            nonlocal ctx_removed
+            ctx_removed = dev == self.dev
+            self.assertEqual(removed, ctx_removed)
+
+        def on_removed(dev):
+            nonlocal removed
+            removed = dev.props.removed
+            self.assertNotEqual(removed, ctx_removed)
+
+        self.assertFalse(self.dev.props.removed)
+        self.dev.connect('notify::removed', on_removed_notify)
+        self.ctx.connect('device-removed', on_ctx_removed)
+        self.dev.connect('removed', on_removed)
+
+        self.start_verify(FPrint.Print.new(self.dev),
+            identify=self.dev.supports_identify())
+
+        self.send_command('UNPLUG')
+        self.assertEqual(notified_spec.name, 'removed')
+        self.assertTrue(self.dev.props.removed)
+        self.assertIn(self.dev, self.ctx.get_devices())
+        self.assertFalse(removed)
+
+        with self.assertRaises(GLib.GError) as error:
+            self.complete_verify()
+        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
+                                                FPrint.DeviceError.REMOVED))
+
+        self.assertTrue(removed)
+        self.assertIn(self.dev, self.ctx.get_devices())
+
+        with self.assertRaises(GLib.GError) as error:
+            self.dev.close_sync()
+        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
+                                                FPrint.DeviceError.REMOVED))
+
+        while not ctx_removed:
+            ctx.iteration(True)
+
+        self.assertNotIn(self.dev, self.ctx.get_devices())
 
 
 class VirtualDevice(VirtualDeviceBase):
@@ -334,7 +458,8 @@ class VirtualDevice(VirtualDeviceBase):
         self.assertEqual(self.dev.get_name(), 'Virtual device for debugging')
         self.assertTrue(self.dev.is_open())
         self.assertEqual(self.dev.get_scan_type(), FPrint.ScanType.SWIPE)
-        self.assertEqual(self.dev.get_nr_enroll_stages(), 5)
+        self.assertEqual(self.dev.get_nr_enroll_stages(),
+                         self.DEFAULT_ENROLL_STEPS)
         self.assertFalse(self.dev.supports_identify())
         self.assertFalse(self.dev.supports_capture())
         self.assertFalse(self.dev.has_storage())
@@ -592,7 +717,7 @@ class VirtualDevice(VirtualDeviceBase):
         self.send_command('SCAN', 'another-id')
         verify_match, verify_fp = self.dev.verify_sync(enrolled)
         self.assertFalse(verify_match)
-        if self.dev.has_storage():
+        if self.dev.get_features() & FPrint.DeviceFeature.STORAGE:
             self.assertIsNone(verify_fp)
         else:
             self.assertFalse(verify_fp.equal(enrolled))
@@ -694,69 +819,6 @@ class VirtualDevice(VirtualDeviceBase):
             self.send_command('SET_SCAN_TYPE', 'eye-contact')
             self.assertEqual(self.dev.get_scan_type(), FPrint.ScanType.SWIPE)
             self.assertIsNone(notified_spec)
-
-    def test_device_unplug(self):
-        self._close_on_teardown = False
-        notified_spec = None
-        def on_removed_notify(dev, spec):
-            nonlocal notified_spec
-            notified_spec = spec
-
-        removed = False
-        def on_removed(dev):
-            nonlocal removed
-            removed = True
-
-        self.assertFalse(self.dev.props.removed)
-
-        self.dev.connect('notify::removed', on_removed_notify)
-        self.dev.connect('removed', on_removed)
-        self.send_command('UNPLUG')
-        self.assertEqual(notified_spec.name, 'removed')
-        self.assertTrue(self.dev.props.removed)
-        self.assertTrue(removed)
-
-        with self.assertRaises(GLib.GError) as error:
-            self.dev.close_sync()
-        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
-                                                FPrint.DeviceError.REMOVED))
-
-    def test_device_unplug_during_verify(self):
-        self._close_on_teardown = False
-
-        notified_spec = None
-        def on_removed_notify(dev, spec):
-            nonlocal notified_spec
-            notified_spec = spec
-
-        removed = False
-        def on_removed(dev):
-            nonlocal removed
-            removed = True
-
-        self.assertFalse(self.dev.props.removed)
-        self.dev.connect('notify::removed', on_removed_notify)
-        self.dev.connect('removed', on_removed)
-
-        self.start_verify(FPrint.Print.new(self.dev),
-            identify=self.dev.supports_identify())
-
-        self.send_command('UNPLUG')
-        self.assertEqual(notified_spec.name, 'removed')
-        self.assertTrue(self.dev.props.removed)
-        self.assertFalse(removed)
-
-        with self.assertRaises(GLib.GError) as error:
-            self.complete_verify()
-        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
-                                                FPrint.DeviceError.REMOVED))
-
-        self.assertTrue(removed)
-
-        with self.assertRaises(GLib.GError) as error:
-            self.dev.close_sync()
-        self.assertTrue(error.exception.matches(FPrint.DeviceError.quark(),
-                                                FPrint.DeviceError.REMOVED))
 
     def test_device_sleep(self):
         self.send_sleep(1500)

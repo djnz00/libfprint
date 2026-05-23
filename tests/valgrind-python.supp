@@ -41,6 +41,20 @@
 }
 
 {
+   ignore__py_addr32
+   Memcheck:Addr32
+   ...
+   fun:_Py*
+}
+
+{
+   ignore__py_addr32
+   Memcheck:Addr32
+   ...
+   fun:Py*
+}
+
+{
    ignore_py_leaks
    Memcheck:Leak
    ...
@@ -52,4 +66,53 @@
    Memcheck:Leak
    ...
    fun:_Py*
+}
+
+{
+   ignore__libpython_leaks
+   Memcheck:Leak
+   fun:malloc
+   obj:/usr/lib*/libpython3*.so.*
+}
+
+{
+   ignore__libpython_leaks
+   Memcheck:Leak
+   fun:malloc
+   obj:/usr/lib/*/libpython3*.so.*
+}
+
+{
+   ignore__libpython_leaks
+   Memcheck:Leak
+   fun:realloc
+   obj:/usr/lib*/libpython3*.so.*
+}
+
+{
+   ignore__libpython_leaks
+   Memcheck:Leak
+   fun:realloc
+   obj:/usr/lib/*/libpython3*.so.*
+}
+
+{
+   ignore__pygobject_possible_leaks
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   obj:/usr/lib*/python*/site-packages/gi/_gi.cpython-*.so
+   obj:/usr/lib*/libpython3.*.so.*
+}
+
+{
+   ignore__pygobject_instance_leaks
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:g_type_create_instance
+   fun:gi_info_new_full
+   ...
+   obj:/usr/lib*/python*/site-packages/gi/_gi.cpython-*.so
+   obj:/usr/lib*/libpython3.*.so.*
 }

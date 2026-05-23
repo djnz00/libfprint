@@ -225,6 +225,7 @@ fp_device_finalize (GObject *object)
 
   g_clear_pointer (&priv->current_idle_cancel_source, g_source_destroy);
   g_clear_pointer (&priv->current_task_idle_return_source, g_source_destroy);
+  g_clear_pointer (&priv->critical_section_flush_source, g_source_destroy);
 
   g_clear_pointer (&priv->device_id, g_free);
   g_clear_pointer (&priv->device_name, g_free);
@@ -291,14 +292,14 @@ fp_device_get_property (GObject    *object,
 
     case PROP_FPI_UDEV_DATA_SPIDEV:
       if (cls->type == FP_DEVICE_TYPE_UDEV)
-        g_value_set_string (value, g_strdup (priv->udev_data.spidev_path));
+        g_value_set_string (value, priv->udev_data.spidev_path);
       else
         g_value_set_string (value, NULL);
       break;
 
     case PROP_FPI_UDEV_DATA_HIDRAW:
       if (cls->type == FP_DEVICE_TYPE_UDEV)
-        g_value_set_string (value, g_strdup (priv->udev_data.hidraw_path));
+        g_value_set_string (value, priv->udev_data.hidraw_path);
       else
         g_value_set_string (value, NULL);
       break;
@@ -482,6 +483,9 @@ fp_device_class_init (FpDeviceClass *klass)
                          NULL,
                          G_PARAM_STATIC_STRINGS | G_PARAM_READABLE);
 
+  /**
+   * FpDevice:open: (getter is_open):
+   */
   properties[PROP_OPEN] =
     g_param_spec_boolean ("open",
                           "Opened",
@@ -948,16 +952,6 @@ fp_device_close_finish (FpDevice     *device,
   return g_task_propagate_boolean (G_TASK (result), error);
 }
 
-static void
-complete_suspend_resume_task (FpDevice *device)
-{
-  FpDevicePrivate *priv = fp_device_get_instance_private (device);
-
-  g_assert (priv->suspend_resume_task);
-
-  g_task_return_boolean (g_steal_pointer (&priv->suspend_resume_task), TRUE);
-}
-
 /**
  * fp_device_suspend:
  * @device: a #FpDevice
@@ -1008,48 +1002,7 @@ fp_device_suspend (FpDevice           *device,
 
   priv->suspend_resume_task = g_steal_pointer (&task);
 
-  /* If the device is currently idle, just complete immediately.
-   * For long running tasks, call the driver handler right away, for short
-   * tasks, wait for completion and then return the task.
-   */
-  switch (priv->current_action)
-    {
-    case FPI_DEVICE_ACTION_NONE:
-      fpi_device_suspend_complete (device, NULL);
-      break;
-
-    case FPI_DEVICE_ACTION_ENROLL:
-    case FPI_DEVICE_ACTION_VERIFY:
-    case FPI_DEVICE_ACTION_IDENTIFY:
-    case FPI_DEVICE_ACTION_CAPTURE:
-      if (FP_DEVICE_GET_CLASS (device)->suspend)
-        {
-          if (priv->critical_section)
-            priv->suspend_queued = TRUE;
-          else
-            FP_DEVICE_GET_CLASS (device)->suspend (device);
-        }
-      else
-        {
-          fpi_device_suspend_complete (device, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
-        }
-      break;
-
-    default:
-    case FPI_DEVICE_ACTION_PROBE:
-    case FPI_DEVICE_ACTION_OPEN:
-    case FPI_DEVICE_ACTION_CLOSE:
-    case FPI_DEVICE_ACTION_DELETE:
-    case FPI_DEVICE_ACTION_LIST:
-    case FPI_DEVICE_ACTION_CLEAR_STORAGE:
-      g_signal_connect_object (priv->current_task,
-                               "notify::completed",
-                               G_CALLBACK (complete_suspend_resume_task),
-                               device,
-                               G_CONNECT_SWAPPED);
-
-      break;
-    }
+  fpi_device_suspend (device);
 }
 
 /**
@@ -1114,41 +1067,7 @@ fp_device_resume (FpDevice           *device,
 
   priv->suspend_resume_task = g_steal_pointer (&task);
 
-  switch (priv->current_action)
-    {
-    case FPI_DEVICE_ACTION_NONE:
-      fpi_device_resume_complete (device, NULL);
-      break;
-
-    case FPI_DEVICE_ACTION_ENROLL:
-    case FPI_DEVICE_ACTION_VERIFY:
-    case FPI_DEVICE_ACTION_IDENTIFY:
-    case FPI_DEVICE_ACTION_CAPTURE:
-      if (FP_DEVICE_GET_CLASS (device)->resume)
-        {
-          if (priv->critical_section)
-            priv->resume_queued = TRUE;
-          else
-            FP_DEVICE_GET_CLASS (device)->resume (device);
-        }
-      else
-        {
-          fpi_device_resume_complete (device, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
-        }
-      break;
-
-    default:
-    case FPI_DEVICE_ACTION_PROBE:
-    case FPI_DEVICE_ACTION_OPEN:
-    case FPI_DEVICE_ACTION_CLOSE:
-    case FPI_DEVICE_ACTION_DELETE:
-    case FPI_DEVICE_ACTION_LIST:
-    case FPI_DEVICE_ACTION_CLEAR_STORAGE:
-      /* cannot happen as we make sure these tasks complete before suspend */
-      g_assert_not_reached ();
-      complete_suspend_resume_task (device);
-      break;
-    }
+  fpi_device_resume (device);
 }
 
 /**
@@ -1172,14 +1091,23 @@ fp_device_resume_finish (FpDevice     *device,
   return g_task_propagate_boolean (G_TASK (result), error);
 }
 
+static void
+enroll_data_free (FpEnrollData *data)
+{
+  if (data->enroll_progress_destroy)
+    data->enroll_progress_destroy (data->enroll_progress_data);
+  data->enroll_progress_data = NULL;
+  g_clear_object (&data->print);
+  g_free (data);
+}
 
 /**
  * fp_device_enroll:
  * @device: a #FpDevice
  * @template_print: (transfer floating): a #FpPrint
  * @cancellable: (nullable): a #GCancellable, or %NULL
- * @progress_cb: (nullable) (scope notified): progress reporting callback
- * @progress_data: (closure progress_cb): user data for @progress_cb
+ * @progress_cb: (nullable) (closure progress_data) (scope notified): progress reporting callback
+ * @progress_data: user data for @progress_cb
  * @progress_destroy: (destroy progress_data): Destroy notify for @progress_data
  * @callback: (scope async): the function to call on completion
  * @user_data: the data to pass to @callback
@@ -1189,10 +1117,11 @@ fp_device_resume_finish (FpDevice     *device,
  * fp_device_enroll_finish().
  *
  * The @template_print parameter is a #FpPrint with available metadata filled
- * in. The driver may make use of this metadata, when e.g. storing the print on
- * device memory. It is undefined whether this print is filled in by the driver
- * and returned, or whether the driver will return a newly created print after
- * enrollment succeeded.
+ * in and, optionally, with existing fingerprint data to be updated with newly
+ * enrolled fingerprints if a device driver supports it. The driver may make use
+ * of the metadata, when e.g. storing the print on device memory. It is undefined
+ * whether this print is filled in by the driver and returned, or whether the
+ * driver will return a newly created print after enrollment succeeded.
  */
 void
 fp_device_enroll (FpDevice           *device,
@@ -1229,24 +1158,31 @@ fp_device_enroll (FpDevice           *device,
 
   if (!FP_IS_PRINT (template_print))
     {
-      g_warning ("User did not pass a print template!");
       g_task_return_error (task,
-                           fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
+                           fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
+                                                     "User did not pass a print template!"));
       return;
     }
 
   g_object_get (template_print, "fpi-type", &print_type, NULL);
   if (print_type != FPI_PRINT_UNDEFINED)
     {
-      g_warning ("Passed print template must be newly created and blank!");
-      g_task_return_error (task,
-                           fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
-      return;
+      if (!fp_device_has_feature (device, FP_DEVICE_FEATURE_UPDATE_PRINT))
+        {
+          g_task_return_error (task,
+                               fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
+                                                         "A device does not support print updates!"));
+          return;
+        }
+      if (!fp_print_compatible (template_print, device))
+        {
+          g_task_return_error (task,
+                               fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
+                                                         "The print and device must have a matching driver and device id"
+                                                         " for a fingerprint update to succeed"));
+          return;
+        }
     }
-
-  priv->current_action = FPI_DEVICE_ACTION_ENROLL;
-  priv->current_task = g_steal_pointer (&task);
-  setup_task_cancellable (device);
 
   fpi_device_update_temp (device, TRUE);
   if (priv->temp_current == FP_TEMPERATURE_HOT)
@@ -1255,6 +1191,10 @@ fp_device_enroll (FpDevice           *device,
       fpi_device_update_temp (device, FALSE);
       return;
     }
+
+  priv->current_action = FPI_DEVICE_ACTION_ENROLL;
+  priv->current_task = g_steal_pointer (&task);
+  setup_task_cancellable (device);
 
   data = g_new0 (FpEnrollData, 1);
   data->print = g_object_ref_sink (template_print);
@@ -1289,13 +1229,30 @@ fp_device_enroll_finish (FpDevice     *device,
   return g_task_propagate_pointer (G_TASK (result), error);
 }
 
+static void
+match_data_free (FpMatchData *data)
+{
+  g_clear_object (&data->print);
+  g_clear_object (&data->match);
+  g_clear_error (&data->error);
+
+  if (data->match_destroy)
+    data->match_destroy (data->match_data);
+  data->match_data = NULL;
+
+  g_clear_object (&data->enrolled_print);
+  g_clear_pointer (&data->gallery, g_ptr_array_unref);
+
+  g_free (data);
+}
+
 /**
  * fp_device_verify:
  * @device: a #FpDevice
  * @enrolled_print: a #FpPrint to verify
  * @cancellable: (nullable): a #GCancellable, or %NULL
- * @match_cb: (nullable) (scope notified): match reporting callback
- * @match_data: (closure match_cb): user data for @match_cb
+ * @match_cb: (nullable) (scope notified) (closure match_data): match reporting callback
+ * @match_data: user data for @match_cb
  * @match_destroy: (destroy match_data): Destroy notify for @match_data
  * @callback: the function to call on completion
  * @user_data: the data to pass to @callback
@@ -1345,10 +1302,6 @@ fp_device_verify (FpDevice           *device,
       return;
     }
 
-  priv->current_action = FPI_DEVICE_ACTION_VERIFY;
-  priv->current_task = g_steal_pointer (&task);
-  setup_task_cancellable (device);
-
   fpi_device_update_temp (device, TRUE);
   if (priv->temp_current == FP_TEMPERATURE_HOT)
     {
@@ -1356,6 +1309,10 @@ fp_device_verify (FpDevice           *device,
       fpi_device_update_temp (device, FALSE);
       return;
     }
+
+  priv->current_action = FPI_DEVICE_ACTION_VERIFY;
+  priv->current_task = g_steal_pointer (&task);
+  setup_task_cancellable (device);
 
   data = g_new0 (FpMatchData, 1);
   data->enrolled_print = g_object_ref (enrolled_print);
@@ -1420,8 +1377,8 @@ fp_device_verify_finish (FpDevice     *device,
  * @device: a #FpDevice
  * @prints: (element-type FpPrint) (transfer none): #GPtrArray of #FpPrint
  * @cancellable: (nullable): a #GCancellable, or %NULL
- * @match_cb: (nullable) (scope notified): match reporting callback
- * @match_data: (closure match_cb): user data for @match_cb
+ * @match_cb: (nullable) (scope notified) (closure match_data): match reporting callback
+ * @match_data: user data for @match_cb
  * @match_destroy: (destroy match_data): Destroy notify for @match_data
  * @callback: the function to call on completion
  * @user_data: the data to pass to @callback
@@ -1472,9 +1429,13 @@ fp_device_identify (FpDevice           *device,
       return;
     }
 
-  priv->current_action = FPI_DEVICE_ACTION_IDENTIFY;
-  priv->current_task = g_steal_pointer (&task);
-  setup_task_cancellable (device);
+  if (prints == NULL)
+    {
+      g_task_return_error (task,
+                           fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
+                                                     "Invalid gallery array"));
+      return;
+    }
 
   fpi_device_update_temp (device, TRUE);
   if (priv->temp_current == FP_TEMPERATURE_HOT)
@@ -1483,6 +1444,10 @@ fp_device_identify (FpDevice           *device,
       fpi_device_update_temp (device, FALSE);
       return;
     }
+
+  priv->current_action = FPI_DEVICE_ACTION_IDENTIFY;
+  priv->current_task = g_steal_pointer (&task);
+  setup_task_cancellable (device);
 
   data = g_new0 (FpMatchData, 1);
   /* We cannot store the gallery directly, because the ptr array may not own
@@ -1597,10 +1562,6 @@ fp_device_capture (FpDevice           *device,
       return;
     }
 
-  priv->current_action = FPI_DEVICE_ACTION_CAPTURE;
-  priv->current_task = g_steal_pointer (&task);
-  setup_task_cancellable (device);
-
   fpi_device_update_temp (device, TRUE);
   if (priv->temp_current == FP_TEMPERATURE_HOT)
     {
@@ -1608,6 +1569,10 @@ fp_device_capture (FpDevice           *device,
       fpi_device_update_temp (device, FALSE);
       return;
     }
+
+  priv->current_action = FPI_DEVICE_ACTION_CAPTURE;
+  priv->current_task = g_steal_pointer (&task);
+  setup_task_cancellable (device);
 
   priv->wait_for_finger = wait_for_finger;
 
@@ -1981,8 +1946,8 @@ fp_device_enroll_sync (FpDevice        *device,
  * @device: a #FpDevice
  * @enrolled_print: a #FpPrint to verify
  * @cancellable: (nullable): a #GCancellable, or %NULL
- * @match_cb: (nullable) (scope call): match reporting callback
- * @match_data: (closure match_cb): user data for @match_cb
+ * @match_cb: (nullable) (scope call) (closure match_data): match reporting callback
+ * @match_data: user data for @match_cb
  * @match: (out): Whether the user presented the correct finger
  * @print: (out) (transfer full) (nullable): Location to store the scanned print, or %NULL to ignore
  * @error: Return location for errors, or %NULL to ignore
@@ -2021,8 +1986,8 @@ fp_device_verify_sync (FpDevice     *device,
  * @device: a #FpDevice
  * @prints: (element-type FpPrint) (transfer none): #GPtrArray of #FpPrint
  * @cancellable: (nullable): a #GCancellable, or %NULL
- * @match_cb: (nullable) (scope call): match reporting callback
- * @match_data: (closure match_cb): user data for @match_cb
+ * @match_cb: (nullable) (scope call) (closure match_data): match reporting callback
+ * @match_data: user data for @match_cb
  * @match: (out) (transfer full) (nullable): Location for the matched #FpPrint, or %NULL
  * @print: (out) (transfer full) (nullable): Location for the new #FpPrint, or %NULL
  * @error: Return location for errors, or %NULL to ignore

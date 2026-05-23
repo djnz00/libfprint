@@ -32,17 +32,35 @@ static void compose_and_send_identify_msg (FpDevice *device);
 
 static const FpIdEntry id_table[] = {
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00BD,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C2,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C4,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C6,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00DF,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00E9,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00F0,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00F9,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00FC,  },
-  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C2,  },
-  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C9,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0100,  },
-  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00F0,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0103,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0104,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0106,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0107,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0108,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0109,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x010A,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0123,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0124,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0126,  },
   { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0129,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x015F,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0168,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0169,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x016C,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0173,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x0174,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x019D,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x019F,  },
+  { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x01A0,  },
   { .vid = 0,  .pid = 0,  .driver_data = 0 },   /* terminating entry */
 };
 
@@ -104,7 +122,11 @@ cmd_receive_cb (FpiUsbTransfer *transfer,
 
           if (self->cmd_complete_on_removal)
             {
-              fpi_ssm_mark_completed (transfer->ssm);
+              if (self->delay_error)
+                fpi_ssm_mark_failed (transfer->ssm,
+                                     g_steal_pointer (&self->delay_error));
+              else
+                fpi_ssm_mark_completed (transfer->ssm);
               return;
             }
         }
@@ -225,6 +247,7 @@ cmd_interrupt_cb (FpiUsbTransfer *transfer,
     }
   else
     {
+      fpi_device_critical_leave (device);
       fpi_usb_transfer_submit (fpi_usb_transfer_ref (transfer),
                                0,
                                NULL,
@@ -638,18 +661,21 @@ verify (FpDevice *device)
 }
 
 static void
-identify_complete_after_finger_removal (FpiDeviceSynaptics *self)
+identify_complete_after_finger_removal (FpiDeviceSynaptics *self, GError *error)
 {
   FpDevice *device = FP_DEVICE (self);
 
   if (self->finger_on_sensor)
     {
       fp_dbg ("delaying identify report until after finger removal!");
+      if (error)
+        g_propagate_error (&self->delay_error, error);
+
       self->cmd_complete_on_removal = TRUE;
     }
   else
     {
-      fpi_device_identify_complete (device, NULL);
+      fpi_device_identify_complete (device, error);
     }
 }
 
@@ -699,19 +725,18 @@ identify_msg_cb (FpiDeviceSynaptics *self,
           fp_info ("Match error occurred");
           fpi_device_identify_report (device, NULL, NULL,
                                       fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
-          identify_complete_after_finger_removal (self);
+          identify_complete_after_finger_removal (self, NULL);
         }
       else if (resp->result == BMKT_FP_NO_MATCH)
         {
           fp_info ("Print didn't match");
           fpi_device_identify_report (device, NULL, NULL, NULL);
-          identify_complete_after_finger_removal (self);
+          identify_complete_after_finger_removal (self, NULL);
         }
-      else if (resp->result == BMKT_FP_DATABASE_NO_RECORD_EXISTS)
+      else if (resp->result == BMKT_FP_DATABASE_NO_RECORD_EXISTS || resp->result == BMKT_FP_DATABASE_EMPTY)
         {
           fp_info ("Print is not in database");
-          fpi_device_identify_complete (device,
-                                        fpi_device_error_new (FP_DEVICE_ERROR_DATA_NOT_FOUND));
+          identify_complete_after_finger_removal (self, fpi_device_error_new (FP_DEVICE_ERROR_DATA_NOT_FOUND));
         }
       else
         {
@@ -747,7 +772,7 @@ identify_msg_cb (FpiDeviceSynaptics *self,
         else
           fpi_device_identify_report (device, NULL, print, NULL);
 
-        identify_complete_after_finger_removal (self);
+        identify_complete_after_finger_removal (self, NULL);
       }
     }
 }
@@ -1233,6 +1258,12 @@ dev_probe (FpDevice *device)
     {
       fpi_device_probe_complete (device, NULL, NULL, error);
       return;
+    }
+
+  if (!g_usb_device_reset (usb_dev, &error))
+    {
+      fp_dbg ("%s g_usb_device_reset failed %s", G_STRFUNC, error->message);
+      goto err_close;
     }
 
   if (!g_usb_device_claim_interface (usb_dev, 0, 0, &error))

@@ -191,12 +191,12 @@ on_listener_connected (FpiDeviceVirtualListener *listener,
 
   switch (state)
     {
-    case FPI_IMAGE_DEVICE_STATE_IDLE:
     case FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_ON:
     case FPI_IMAGE_DEVICE_STATE_CAPTURE:
-    case FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF:
       recv_image (self);
 
+    case FPI_IMAGE_DEVICE_STATE_IDLE:
+    case FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF:
     case FPI_IMAGE_DEVICE_STATE_INACTIVE:
     case FPI_IMAGE_DEVICE_STATE_ACTIVATING:
     case FPI_IMAGE_DEVICE_STATE_DEACTIVATING:
@@ -310,6 +310,7 @@ fpi_device_virtual_image_class_init (FpDeviceVirtualImageClass *klass)
 {
   FpDeviceClass *dev_class = FP_DEVICE_CLASS (klass);
   FpImageDeviceClass *img_class = FP_IMAGE_DEVICE_CLASS (klass);
+  const char *hot_seconds;
 
   dev_class->id = FP_COMPONENT;
   dev_class->full_name = "Virtual image device for debugging";
@@ -321,4 +322,17 @@ fpi_device_virtual_image_class_init (FpDeviceVirtualImageClass *klass)
 
   img_class->activate = dev_activate;
   img_class->deactivate = dev_deactivate;
+
+  if ((hot_seconds = g_getenv ("FP_VIRTUAL_IMAGE_HOT_SECONDS")) &&
+      *hot_seconds != '\0')
+    {
+      gint64 hot_seconds_value;
+
+      hot_seconds_value = g_ascii_strtoll (hot_seconds, NULL, 10);
+      if (hot_seconds_value >= G_MAXINT32 || hot_seconds_value < 0)
+        hot_seconds_value = -1;
+
+      dev_class->temp_hot_seconds = hot_seconds_value;
+      g_debug ("device hot seconds set to %d", dev_class->temp_hot_seconds);
+    }
 }

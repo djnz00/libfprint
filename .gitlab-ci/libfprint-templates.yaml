@@ -1,6 +1,11 @@
+# Bump image version on .gitlab-ci/libfprint-image-variables.yaml to trigger
+# a rebuild on changes to this file
+
 .libfprint_common_variables:
   LIBFPRINT_DEPENDENCIES:
+    appstream
     doxygen
+    dnf-plugins-core
     flatpak-builder
     gcc
     gcc-c++
@@ -9,15 +14,18 @@
     glib2-devel
     glibc-devel
     gobject-introspection-devel
+    gnome-desktop-testing
     gtk-doc
     gtk3-devel
     libabigail
+    libasan
     libgusb-devel
     libgudev-devel
+    libubsan
     libX11-devel
     libXv-devel
     meson
-    nss-devel
+    openssl-devel
     pixman-devel
     python3-cairo
     python3-gobject
@@ -27,3 +35,15 @@
     valgrind
     clang-analyzer
     diffutils
+
+  LIBFPRINT_EXEC: |
+    dnf -y install dnf-utils
+    debuginfo-install -y \
+      glib2 \
+      glibc \
+      libgusb \
+      libusb \
+      openssl \
+      pixman \
+      python3-gobject \
+      python3-gobject-base

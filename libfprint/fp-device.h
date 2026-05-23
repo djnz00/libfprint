@@ -59,6 +59,7 @@ typedef enum {
  * @FP_DEVICE_FEATURE_STORAGE_CLEAR: Supports clearing the whole storage
  * @FP_DEVICE_FEATURE_DUPLICATES_CHECK: Natively supports duplicates detection
  * @FP_DEVICE_FEATURE_ALWAYS_ON: Whether the device can run continuously
+ * @FP_DEVICE_FEATURE_UPDATE_PRINT: Supports updating an existing print record using new scans
  */
 typedef enum /*< flags >*/ {
   FP_DEVICE_FEATURE_NONE = 0,
@@ -71,6 +72,7 @@ typedef enum /*< flags >*/ {
   FP_DEVICE_FEATURE_STORAGE_CLEAR = 1 << 6,
   FP_DEVICE_FEATURE_DUPLICATES_CHECK = 1 << 7,
   FP_DEVICE_FEATURE_ALWAYS_ON = 1 << 8,
+  FP_DEVICE_FEATURE_UPDATE_PRINT = 1 << 9,
 } FpDeviceFeature;
 
 /**
@@ -111,6 +113,8 @@ typedef enum {
  * @FP_DEVICE_RETRY_REMOVE_FINGER: The scan did not succeed due to quality or
  *   pressure problems; the user should remove their finger from the scanner
  *   before retrying.
+ * @FP_DEVICE_RETRY_TOO_FAST: The scan did not succeed because the finger
+ *   swipe or touch was too fast.
  *
  * Error codes representing scan failures resulting in the user needing to
  * retry.
@@ -120,6 +124,7 @@ typedef enum {
   FP_DEVICE_RETRY_TOO_SHORT,
   FP_DEVICE_RETRY_CENTER_FINGER,
   FP_DEVICE_RETRY_REMOVE_FINGER,
+  FP_DEVICE_RETRY_TOO_FAST,
 } FpDeviceRetry;
 
 /**

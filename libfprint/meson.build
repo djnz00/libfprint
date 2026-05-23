@@ -1,3 +1,11 @@
+spi_sources = []
+spi_headers = []
+
+if enabled_spi_drivers.length() > 0
+  spi_headers = ['fpi-spi-transfer.h']
+  spi_sources = ['fpi-spi-transfer.c']
+endif
+
 libfprint_sources = [
     'fp-context.c',
     'fp-device.c',
@@ -16,8 +24,7 @@ libfprint_private_sources = [
     'fpi-print.c',
     'fpi-ssm.c',
     'fpi-usb-transfer.c',
-    'fpi-spi-transfer.c',
-]
+] + spi_sources
 
 libfprint_public_headers = [
     'fp-context.h',
@@ -41,9 +48,8 @@ libfprint_private_headers = [
     'fpi-minutiae.h',
     'fpi-print.h',
     'fpi-usb-transfer.h',
-    'fpi-spi-transfer.h',
     'fpi-ssm.h',
-]
+] + spi_headers
 
 nbis_sources = [
     'nbis/bozorth3/bozorth3.c',
@@ -119,6 +125,8 @@ driver_sources = {
         [ 'drivers/etes603.c' ],
     'egis0570' :
         [ 'drivers/egis0570.c' ],
+    'egismoc' :
+        [ 'drivers/egismoc/egismoc.c' ],
     'vfs0050' :
         [ 'drivers/vfs0050.c' ],
     'elan' :
@@ -145,6 +153,12 @@ driver_sources = {
         [ 'drivers/goodixtls/goodix52xd.c' ],
     'goodixtls53xd' :
         [ 'drivers/goodixtls/goodix53xd.c' ],
+    'fpcmoc' :
+        [ 'drivers/fpcmoc/fpc.c' ],
+    'realtek' :
+        [ 'drivers/realtek/realtek.c' ],
+    'focaltech_moc' :
+        [ 'drivers/focaltech_moc/focaltech_moc.c' ],
 }
 
 helper_sources = {
@@ -154,10 +168,14 @@ helper_sources = {
         [ 'drivers/aesx660.c' ],
     'aes3k' :
         [ 'drivers/aes3k.c' ],
-    'goodixtls' :
-        [ 'drivers/goodixtls/goodix_proto.c', 'drivers/goodixtls/goodix.c', 'drivers/goodixtls/goodixtls.c' ],
-    'nss' :
+    'openssl' :
         [ ],
+    'goodixtls' :
+        [
+          'drivers/goodixtls/goodix.c',
+          'drivers/goodixtls/goodix_proto.c',
+          'drivers/goodixtls/goodixtls.c',
+        ],
     'udev' :
         [ ],
     'virtual' :
@@ -249,6 +267,7 @@ libnbis = static_library('nbis',
         '-Wno-discarded-qualifiers',
         '-Wno-array-bounds',
         '-Wno-array-parameter',
+        '-Wno-unused-but-set-variable',
     ]),
     install: false)
 
@@ -268,8 +287,13 @@ libfprint_drivers = static_library('fprint-drivers',
     link_with: libfprint_private,
     install: false)
 
-mapfile = files('libfprint.ver')
-vflag = '-Wl,--version-script,@0@/@1@'.format(meson.source_root(), mapfile[0])
+mapfile = files('libfprint.ver')[0]
+if meson.version().version_compare('>=1.4')
+    mapfile_path = mapfile.full_path()
+else
+    mapfile_path = meson.project_source_root() / '@0@'.format(mapfile)
+endif
+vflag = '-Wl,--version-script,@0@'.format(mapfile_path)
 
 libfprint = shared_library(versioned_libname.split('lib')[1],
     sources: [
@@ -321,6 +345,21 @@ udev_hwdb_generator = custom_target('udev-hwdb',
     install: false,
 )
 
+metainfo = executable('fprint-list-metainfo',
+    'fprint-list-metainfo.c',
+    dependencies: libfprint_private_dep,
+    link_with: libfprint_drivers,
+    install: false)
+
+metainfo_generator = custom_target('metainfo',
+    output: 'org.freedesktop.libfprint.metainfo.xml',
+    depend_files: drivers_sources,
+    capture: true,
+    command: [ metainfo ],
+    install: true,
+    install_dir: datadir / 'metainfo'
+)
+
 if install_udev_rules
     udev_rules = executable('fprint-list-udev-rules',
         'fprint-list-udev-rules.c',
@@ -338,16 +377,18 @@ if install_udev_rules
     )
 endif
 
-custom_target('sync-udev-hwdb',
+sync_udev_udb = custom_target('sync-udev-hwdb',
     depends: udev_hwdb_generator,
     output: 'sync-udev-hwdb',
     install: false,
     command: [
         'cp', '-v',
         udev_hwdb_generator.full_path(),
-        meson.source_root() / 'data'
+        meson.project_source_root() / 'data'
     ]
 )
+
+alias_target('sync-udev-hwdb', sync_udev_udb)
 
 supported_devices = executable('fprint-list-supported-devices',
     'fprint-list-supported-devices.c',
@@ -382,6 +423,7 @@ if get_option('introspection')
             'GObject-2.0',
             'GUsb-1.0',
         ],
+        fatal_warnings: true,
         install : true)
     libfprint_gir = libfprint_girtarget[0]
     libfprint_typelib = libfprint_girtarget[1]

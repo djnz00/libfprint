@@ -25,7 +25,21 @@
 G_DEFINE_TYPE (FpiDeviceElanmoc, fpi_device_elanmoc, FP_TYPE_DEVICE)
 
 static const FpIdEntry id_table[] = {
+  { .vid = 0x04f3,  .pid = 0x0c7d,  },
   { .vid = 0x04f3,  .pid = 0x0c7e,  },
+  { .vid = 0x04f3,  .pid = 0x0c82,  },
+  { .vid = 0x04f3,  .pid = 0x0c88,  },
+  { .vid = 0x04f3,  .pid = 0x0c8c,  },
+  { .vid = 0x04f3,  .pid = 0x0c8d,  },
+  { .vid = 0x04f3,  .pid = 0x0c98,  },
+  { .vid = 0x04f3,  .pid = 0x0c99,  },
+  { .vid = 0x04f3,  .pid = 0x0c9d,  },
+  { .vid = 0x04f3,  .pid = 0x0c9f,  },
+  { .vid = 0x04f3,  .pid = 0x0ca3,  },
+  { .vid = 0x04f3,  .pid = 0x0ca7,  },
+  { .vid = 0x04f3,  .pid = 0x0ca8,  },
+  { .vid = 0x04f3,  .pid = 0x0cb0,  },
+  { .vid = 0x04f3,  .pid = 0x0cb2,  },
   { .vid = 0,  .pid = 0,  .driver_data = 0 },   /* terminating entry */
 };
 
@@ -44,9 +58,9 @@ elanmoc_compose_cmd (
   const struct elanmoc_cmd *cmd_info
                     )
 {
-  g_autofree char *cmd_buf = NULL;
+  g_autofree uint8_t *cmd_buf = NULL;
 
-  cmd_buf = g_malloc0 (cmd_info->cmd_len);
+  cmd_buf = g_new0 (uint8_t, cmd_info->cmd_len);
   if(cmd_info->cmd_len < ELAN_MAX_HDR_LEN)
     memcpy (cmd_buf, &cmd_info->cmd_header, cmd_info->cmd_len);
   else
@@ -122,10 +136,10 @@ fp_cmd_receive_cb (FpiUsbTransfer *transfer,
 }
 
 typedef enum {
-  FP_CMD_SEND = 0,
-  FP_CMD_GET,
-  FP_CMD_NUM_STATES,
-} FpCmdState;
+  ELAN_MOC_CMD_SEND = 0,
+  ELAN_MOC_CMD_GET,
+  ELAN_MOC_CMD_NUM_STATES,
+} ElanMocCmdState;
 
 static void
 fp_cmd_run_state (FpiSsm   *ssm,
@@ -136,7 +150,7 @@ fp_cmd_run_state (FpiSsm   *ssm,
 
   switch (fpi_ssm_get_cur_state (ssm))
     {
-    case FP_CMD_SEND:
+    case ELAN_MOC_CMD_SEND:
       if (self->cmd_transfer)
         {
           self->cmd_transfer->ssm = ssm;
@@ -152,7 +166,7 @@ fp_cmd_run_state (FpiSsm   *ssm,
         }
       break;
 
-    case FP_CMD_GET:
+    case ELAN_MOC_CMD_GET:
       if (self->cmd_len_in == 0)
         {
           CommandData *data = fpi_ssm_get_data (ssm);
@@ -219,7 +233,7 @@ elanmoc_get_cmd (FpDevice *device, guint8 *buffer_out,
 
   self->cmd_ssm = fpi_ssm_new (FP_DEVICE (self),
                                fp_cmd_run_state,
-                               FP_CMD_NUM_STATES);
+                               ELAN_MOC_CMD_NUM_STATES);
 
   fpi_ssm_set_data (self->cmd_ssm, data, (GDestroyNotify) fp_cmd_ssm_done_data_free);
 
@@ -374,9 +388,9 @@ elanmoc_enroll_cb (FpiDeviceElanmoc *self,
           enroll_status_report (self, ENROLL_RSP_RETRY, self->num_frames, NULL);
         }
 
-      if (self->num_frames == ELAN_MOC_ENROLL_TIMES && buffer_in[1] == ELAN_MSG_OK)
+      if (self->num_frames == self->max_moc_enroll_time && buffer_in[1] == ELAN_MSG_OK)
         fpi_ssm_next_state (self->task_ssm);
-      else if (self->num_frames < ELAN_MOC_ENROLL_TIMES)
+      else if (self->num_frames < self->max_moc_enroll_time)
         fpi_ssm_jump_to_state (self->task_ssm, MOC_ENROLL_WAIT_FINGER);
       else
         fpi_ssm_mark_failed (self->task_ssm, error);
@@ -439,7 +453,7 @@ elan_enroll_run_state (FpiSsm *ssm, FpDevice *dev)
     case MOC_ENROLL_WAIT_FINGER:
       cmd_buf = elanmoc_compose_cmd (&elanmoc_enroll_cmd);
       cmd_buf[3] = self->curr_enrolled;
-      cmd_buf[4] = ELAN_MOC_ENROLL_TIMES;
+      cmd_buf[4] = self->max_moc_enroll_time;
       cmd_buf[5] = self->num_frames;
       elanmoc_get_cmd (dev, cmd_buf, elanmoc_enroll_cmd.cmd_len, elanmoc_enroll_cmd.resp_len, 1, elanmoc_enroll_cb);
       break;
@@ -504,7 +518,7 @@ create_print_from_response (FpiDeviceElanmoc *self,
       return NULL;
     }
 
-  userid = g_memdup (&buffer_in[5], userid_len);
+  userid = g_memdup2 (&buffer_in[5], userid_len);
   userid_safe = g_strndup ((const char *) &buffer_in[5], userid_len);
   print = fp_print_new (FP_DEVICE (self));
   uid = g_variant_new_fixed_array (G_VARIANT_TYPE_BYTE, userid, userid_len, 1);
@@ -756,6 +770,7 @@ identify_status_report (FpiDeviceElanmoc *self, int verify_status_id,
 }
 
 enum identify_states {
+  IDENTIFY_SET_MODE,
   IDENTIFY_WAIT_FINGER,
   IDENTIFY_NUM_STATES,
 };
@@ -791,6 +806,13 @@ elan_identify_run_state (FpiSsm *ssm, FpDevice *dev)
   fp_info ("elanmoc %s ", __func__);
   switch (fpi_ssm_get_cur_state (ssm))
     {
+    case IDENTIFY_SET_MODE:
+      fp_info ("elanmoc %s IDENTIFY_SET_MODE", __func__);
+      cmd_buf = elanmoc_compose_cmd (&elanmoc_set_mod_cmd);
+      cmd_buf[3] = 0x03;
+      elanmoc_get_cmd (dev, cmd_buf, elanmoc_set_mod_cmd.cmd_len, elanmoc_set_mod_cmd.resp_len, 0, elanmoc_cmd_ack_cb);
+      break;
+
     case IDENTIFY_WAIT_FINGER:
       fp_info ("elanmoc %s VERIFY_WAIT_FINGER", __func__);
       cmd_buf = elanmoc_compose_cmd (&elanmoc_verify_cmd);
@@ -998,6 +1020,12 @@ elanmoc_get_status_cb (FpiDeviceElanmoc *self,
 
   if (buffer_in[1] != 0x03 && self->cmd_retry_cnt != 0)
     {
+      self->cmd_retry_cnt--;
+      cmd_buf = elanmoc_compose_cmd (&cal_status_cmd);
+      elanmoc_get_cmd (FP_DEVICE (self), cmd_buf, cal_status_cmd.cmd_len, cal_status_cmd.resp_len, 0, elanmoc_get_status_cb);
+    }
+  else
+    {
       if(self->cmd_retry_cnt == 0)
         {
           fpi_ssm_mark_failed (self->task_ssm,
@@ -1005,12 +1033,6 @@ elanmoc_get_status_cb (FpiDeviceElanmoc *self,
                                                          "Sensor not ready"));
           return;
         }
-      self->cmd_retry_cnt--;
-      cmd_buf = elanmoc_compose_cmd (&cal_status_cmd);
-      elanmoc_get_cmd (FP_DEVICE (self), cmd_buf, cal_status_cmd.cmd_len, cal_status_cmd.resp_len, 0, elanmoc_get_status_cb);
-    }
-  else
-    {
       fpi_ssm_next_state (self->task_ssm);
     }
 }
@@ -1058,12 +1080,35 @@ elanmoc_open (FpDevice *device)
 {
   FpiDeviceElanmoc *self = FPI_DEVICE_ELANMOC (device);
   GError *error = NULL;
+  gint productid = 0;
 
   if (!g_usb_device_reset (fpi_device_get_usb_device (device), &error))
     goto error;
 
   if (!g_usb_device_claim_interface (fpi_device_get_usb_device (device), 0, 0, &error))
     goto error;
+
+  productid = g_usb_device_get_pid (fpi_device_get_usb_device (device));
+  switch (productid)
+    {
+    case 0x0c8c:
+      self->max_moc_enroll_time = 11;
+      break;
+
+    case 0x0c99:
+      self->max_moc_enroll_time = 14;
+      break;
+
+    case 0x0c8d:
+      self->max_moc_enroll_time = 17;
+      break;
+
+    default:
+      self->max_moc_enroll_time = ELAN_MOC_ENROLL_TIMES;
+      break;
+    }
+
+  fpi_device_set_nr_enroll_stages (device, self->max_moc_enroll_time);
 
   self->task_ssm = fpi_ssm_new (FP_DEVICE (self), dev_init_handler, DEV_INIT_STATES);
   fpi_ssm_start (self->task_ssm, task_ssm_init_done);

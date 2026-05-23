@@ -24,33 +24,62 @@
 #include "fpi-context.h"
 #include "fpi-device.h"
 
-static const FpIdEntry whitelist_id_table[] = {
+static const FpIdEntry allowlist_id_table[] = {
   /* Currently known and unsupported devices.
    * You can generate this list from the wiki page using e.g.:
    *   gio cat https://gitlab.freedesktop.org/libfprint/wiki/-/wikis/Unsupported-Devices.md | sed -n 's!|.*\([0-9a-fA-F]\{4\}\):\([0-9a-fA-F]\{4\}\).*|.*!  { .vid = 0x\1, .pid = 0x\2 },!p'
    */
+  { .vid = 0x0a5c, .pid = 0x5802 },
+  { .vid = 0x047d, .pid = 0x00f2 },
+  { .vid = 0x047d, .pid = 0x8054 },
+  { .vid = 0x047d, .pid = 0x8055 },
+  { .vid = 0x04e8, .pid = 0x730b },
   { .vid = 0x04f3, .pid = 0x036b },
   { .vid = 0x04f3, .pid = 0x0c00 },
-  { .vid = 0x04f3, .pid = 0x0c4b },
   { .vid = 0x04f3, .pid = 0x0c4c },
   { .vid = 0x04f3, .pid = 0x0c57 },
   { .vid = 0x04f3, .pid = 0x0c5e },
+  { .vid = 0x04f3, .pid = 0x0c5a },
+  { .vid = 0x04f3, .pid = 0x0c60 },
+  { .vid = 0x04f3, .pid = 0x0c6c },
+  { .vid = 0x04f3, .pid = 0x0c70 },
+  { .vid = 0x04f3, .pid = 0x0c72 },
+  { .vid = 0x04f3, .pid = 0x0c77 },
+  { .vid = 0x04f3, .pid = 0x0c7c },
+  { .vid = 0x04f3, .pid = 0x0c7f },
+  { .vid = 0x04f3, .pid = 0x0c80 },
+  { .vid = 0x04f3, .pid = 0x0c85 },
+  { .vid = 0x04f3, .pid = 0x0c90 },
   { .vid = 0x04f3, .pid = 0x2706 },
+  { .vid = 0x04f3, .pid = 0x3032 },
+  { .vid = 0x04f3, .pid = 0x3057 },
+  { .vid = 0x04f3, .pid = 0x3104 },
+  { .vid = 0x04f3, .pid = 0x310d },
+  { .vid = 0x04f3, .pid = 0x3128 },
+  { .vid = 0x04f3, .pid = 0x0c8a },
+  { .vid = 0x05ba, .pid = 0x000e },
+  { .vid = 0x06cb, .pid = 0x0051 },
   { .vid = 0x06cb, .pid = 0x0081 },
   { .vid = 0x06cb, .pid = 0x0088 },
   { .vid = 0x06cb, .pid = 0x008a },
   { .vid = 0x06cb, .pid = 0x009a },
   { .vid = 0x06cb, .pid = 0x009b },
+  { .vid = 0x06cb, .pid = 0x00a1 },
   { .vid = 0x06cb, .pid = 0x00a2 },
+  { .vid = 0x06cb, .pid = 0x00a8 },
   { .vid = 0x06cb, .pid = 0x00b7 },
   { .vid = 0x06cb, .pid = 0x00bb },
+  { .vid = 0x06cb, .pid = 0x00bc },
   { .vid = 0x06cb, .pid = 0x00be },
-  { .vid = 0x06cb, .pid = 0x00c4 },
   { .vid = 0x06cb, .pid = 0x00cb },
+  { .vid = 0x06cb, .pid = 0x00c9 },
   { .vid = 0x06cb, .pid = 0x00d8 },
   { .vid = 0x06cb, .pid = 0x00da },
+  { .vid = 0x06cb, .pid = 0x00dc },
+  { .vid = 0x06cb, .pid = 0x00e4 },
   { .vid = 0x06cb, .pid = 0x00e7 },
-  { .vid = 0x06cb, .pid = 0x00e9 },
+  { .vid = 0x06cb, .pid = 0x00fd },
+  { .vid = 0x06cb, .pid = 0x00ff },
   { .vid = 0x0a5c, .pid = 0x5801 },
   { .vid = 0x0a5c, .pid = 0x5805 },
   { .vid = 0x0a5c, .pid = 0x5834 },
@@ -60,7 +89,21 @@ static const FpIdEntry whitelist_id_table[] = {
   { .vid = 0x0a5c, .pid = 0x5843 },
   { .vid = 0x0a5c, .pid = 0x5844 },
   { .vid = 0x0a5c, .pid = 0x5845 },
+  { .vid = 0x0a5c, .pid = 0x5860 },
+  { .vid = 0x0a5c, .pid = 0x5863 },
+  { .vid = 0x0a5c, .pid = 0x5864 },
+  { .vid = 0x0a5c, .pid = 0x5865 },
+  { .vid = 0x0a5c, .pid = 0x5866 },
+  { .vid = 0x0a5c, .pid = 0x5867 },
+  { .vid = 0x0bda, .pid = 0x5812 },
   { .vid = 0x10a5, .pid = 0x0007 },
+  { .vid = 0x10a5, .pid = 0x9200 },
+  { .vid = 0x10a5, .pid = 0x9201 },
+  { .vid = 0x10a5, .pid = 0x9800 },
+  { .vid = 0x10a5, .pid = 0xa120 },
+  { .vid = 0x10a5, .pid = 0xa900 },
+  { .vid = 0x10a5, .pid = 0xa921 },
+  { .vid = 0x10a5, .pid = 0xe340 },
   { .vid = 0x1188, .pid = 0x9545 },
   { .vid = 0x138a, .pid = 0x0007 },
   { .vid = 0x138a, .pid = 0x003a },
@@ -73,45 +116,71 @@ static const FpIdEntry whitelist_id_table[] = {
   { .vid = 0x138a, .pid = 0x0097 },
   { .vid = 0x138a, .pid = 0x009d },
   { .vid = 0x138a, .pid = 0x00ab },
+  { .vid = 0x138a, .pid = 0x00a6 },
   { .vid = 0x147e, .pid = 0x1002 },
   { .vid = 0x1491, .pid = 0x0088 },
   { .vid = 0x16d1, .pid = 0x1027 },
   { .vid = 0x1c7a, .pid = 0x0300 },
   { .vid = 0x1c7a, .pid = 0x0575 },
+  { .vid = 0x1c7a, .pid = 0x0576 },
+  { .vid = 0x1c7a, .pid = 0x0577 },
+  { .vid = 0x1c7a, .pid = 0x057e },
+  { .vid = 0x2541, .pid = 0x0236 },
+  { .vid = 0x2541, .pid = 0x9711 },
   { .vid = 0x27c6, .pid = 0x5042 },
   { .vid = 0x27c6, .pid = 0x5117 },
+  { .vid = 0x27c6, .pid = 0x5120 },
+  { .vid = 0x27c6, .pid = 0x5125 },
   { .vid = 0x27c6, .pid = 0x5201 },
   { .vid = 0x27c6, .pid = 0x5301 },
   { .vid = 0x27c6, .pid = 0x530c },
   { .vid = 0x27c6, .pid = 0x532d },
+  { .vid = 0x27c6, .pid = 0x5335 },
   { .vid = 0x27c6, .pid = 0x533c },
   { .vid = 0x27c6, .pid = 0x5381 },
   { .vid = 0x27c6, .pid = 0x5385 },
   { .vid = 0x27c6, .pid = 0x538c },
   { .vid = 0x27c6, .pid = 0x5395 },
+  { .vid = 0x27c6, .pid = 0x5503 },
+  { .vid = 0x27c6, .pid = 0x550a },
+  { .vid = 0x27c6, .pid = 0x550c },
   { .vid = 0x27c6, .pid = 0x5584 },
   { .vid = 0x27c6, .pid = 0x55a2 },
   { .vid = 0x27c6, .pid = 0x55a4 },
   { .vid = 0x27c6, .pid = 0x55b4 },
   { .vid = 0x27c6, .pid = 0x5740 },
+  { .vid = 0x27c6, .pid = 0x5e0a },
+  { .vid = 0x27c6, .pid = 0x581a },
+  { .vid = 0x27c6, .pid = 0x589a },
+  { .vid = 0x27c6, .pid = 0x5f10 },
+  { .vid = 0x27c6, .pid = 0x5f91 },
+  { .vid = 0x27c6, .pid = 0x6382 },
   { .vid = 0x2808, .pid = 0x9338 },
+  { .vid = 0x2808, .pid = 0x9348 },
+  { .vid = 0x2808, .pid = 0x93a9 },
+  { .vid = 0x2808, .pid = 0xa658 },
+  { .vid = 0x2808, .pid = 0xc652 },
+  { .vid = 0x2808, .pid = 0xa553 },
+  { .vid = 0x298d, .pid = 0x2020 },
   { .vid = 0x298d, .pid = 0x2033 },
+  { .vid = 0x2df0, .pid = 0x0003 },
+  { .vid = 0x3274, .pid = 0x8012 },
   { .vid = 0x3538, .pid = 0x0930 },
   { .vid = 0 },
 };
 
-static const FpIdEntry blacklist_id_table[] = {
+static const FpIdEntry denylist_id_table[] = {
   { .vid = 0x0483, .pid = 0x2016 },
   /* https://bugs.freedesktop.org/show_bug.cgi?id=66659 */
   { .vid = 0x045e, .pid = 0x00bb },
   { .vid = 0 },
 };
 
-static const FpDeviceClass whitelist = {
+static const FpDeviceClass allowlist = {
   .type = FP_DEVICE_TYPE_USB,
-  .id_table = whitelist_id_table,
-  .id = "whitelist",
-  .full_name = "Hardcoded whitelist"
+  .id_table = allowlist_id_table,
+  .id = "allowlist",
+  .full_name = "Hardcoded allowlist"
 };
 
 GHashTable *printed = NULL;
@@ -130,7 +199,7 @@ print_driver (const FpDeviceClass *cls)
       const FpIdEntry *bl_entry;
       char *key;
 
-      for (bl_entry = blacklist_id_table; bl_entry->vid != 0; bl_entry++)
+      for (bl_entry = denylist_id_table; bl_entry->vid != 0; bl_entry++)
         if (entry->vid == bl_entry->vid && entry->pid == bl_entry->pid)
           break;
 
@@ -141,7 +210,7 @@ print_driver (const FpDeviceClass *cls)
 
       if (g_hash_table_lookup (printed, key) != NULL)
         {
-          if (cls == &whitelist)
+          if (cls == &allowlist)
             g_warning ("%s implemented by driver %s",
                        key, (const char *) g_hash_table_lookup (printed, key));
           g_free (key);
@@ -152,7 +221,7 @@ print_driver (const FpDeviceClass *cls)
 
       if (num_printed == 0)
         {
-          if (cls != &whitelist)
+          if (cls != &allowlist)
             g_print ("\n# Supported by libfprint driver %s\n", cls->id);
           else
             g_print ("\n# Known unsupported devices\n");
@@ -206,7 +275,7 @@ main (int argc, char **argv)
       print_driver (cls);
     }
 
-  print_driver (&whitelist);
+  print_driver (&allowlist);
 
   g_hash_table_destroy (printed);
 

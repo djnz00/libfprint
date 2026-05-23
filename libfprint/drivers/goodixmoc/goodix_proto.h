@@ -22,6 +22,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "fpi-byte-reader.h"
+
 #define PACKAGE_CRC_SIZE (4)
 #define PACKAGE_HEADER_SIZE (8)
 
@@ -105,22 +107,24 @@ typedef struct _gxfp_parse_msg
 } gxfp_parse_msg_t, *pgxfp_parse_msg_t;
 
 
-typedef struct _gxfp_enroll_init
+typedef struct _gxfp_enroll_create
 {
   uint8_t tid[TEMPLATE_ID_SIZE];
-} gxfp_enroll_init_t, *pgxfp_enroll_init_t;
+} gxfp_enroll_create_t, *pgxfp_enroll_create_t;
 
 #pragma pack(push, 1)
 typedef struct _template_format
 {
+  uint8_t _0x43_byte;
   uint8_t type;
   uint8_t finger_index;
+  uint8_t pad0;
   uint8_t accountid[32];
   uint8_t tid[32];
   struct
   {
-    uint32_t size;
-    uint8_t  data[56];
+    uint8_t size;
+    uint8_t data[56];
   } payload;
   uint8_t reserve[2];
 } template_format_t, *ptemplate_format_t;
@@ -131,7 +135,7 @@ typedef struct _template_format
 typedef struct _gxfp_verify
 {
   bool     match;
-  uint32_t rejectdetail;
+  uint16_t rejectdetail;
   template_format_t  template;
 } gxfp_verify_t, *pgxfp_verify_t;
 
@@ -190,7 +194,7 @@ typedef struct _fp_cmd_response
   {
     gxfp_parse_msg_t       parse_msg;
     gxfp_verify_t          verify;
-    gxfp_enroll_init_t     enroll_init;
+    gxfp_enroll_create_t   enroll_create;
     gxfp_capturedata_t     capture_data_resp;
     gxfp_check_duplicate_t check_duplicate_resp;
     gxfp_enroll_commit_t   enroll_commit;
@@ -230,13 +234,11 @@ int gx_proto_build_package (uint8_t       *ppackage,
                             const uint8_t *payload,
                             uint32_t       payload_size);
 
-int gx_proto_parse_header (uint8_t     *buffer,
-                           uint32_t     buffer_len,
-                           pack_header *pheader);
+int gx_proto_parse_header (FpiByteReader *reader,
+                           pack_header   *pheader);
 
 int gx_proto_parse_body (uint16_t             cmd,
-                         uint8_t             *buffer,
-                         uint16_t             buffer_len,
+                         FpiByteReader       *byte_reader,
                          pgxfp_cmd_response_t presponse);
 
 int gx_proto_init_sensor_config (pgxfp_sensor_cfg_t pconfig);
