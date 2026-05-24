@@ -105,14 +105,14 @@ static gboolean
 goodix52xd_firmware_supported (const gchar *firmware)
 {
   return (g_strcmp0 (firmware, GOODIX_52XD_FIRMWARE_VERSION) == 0 ||
-          g_strcmp0 (firmware, "GFUSB_GM168SEC_APP_10034") == 0);
+          g_strcmp0 (firmware, GOODIX_52XD_FIRMWARE_VERSION_10034) == 0);
 }
 
 static gboolean
 goodix52xd_set_expected_pmk_hash (FpiDeviceGoodixTls52XD *self,
                                   const gchar            *firmware)
 {
-  if (g_strcmp0 (firmware, "GFUSB_GM168SEC_APP_10034") == 0)
+  if (g_strcmp0 (firmware, GOODIX_52XD_FIRMWARE_VERSION_10034) == 0)
     {
       self->expected_pmk_hash = goodix_52xd_pmk_hash_10034;
       self->expected_pmk_hash_len = sizeof (goodix_52xd_pmk_hash_10034);
@@ -129,6 +129,24 @@ goodix52xd_set_expected_pmk_hash (FpiDeviceGoodixTls52XD *self,
     }
 
   return FALSE;
+}
+
+static const guint8 *
+goodix52xd_get_tls_psk (FpDevice *dev, guint16 *length)
+{
+  FpiDeviceGoodixTls52XD *self = FPI_DEVICE_GOODIXTLS52XD(dev);
+
+  if (!self->firmware_10034)
+    {
+      if (length)
+        *length = 0;
+      return NULL;
+    }
+
+  if (length)
+    *length = sizeof (goodix_52xd_psk_10034);
+
+  return goodix_52xd_psk_10034;
 }
 
 static void check_firmware_version(FpDevice *dev, gchar *firmware,
@@ -980,6 +998,7 @@ static void fpi_device_goodixtls52xd_class_init(
   gx_class->interface = GOODIX_52XD_INTERFACE;
   gx_class->ep_in = GOODIX_52XD_EP_IN;
   gx_class->ep_out = GOODIX_52XD_EP_OUT;
+  gx_class->get_tls_psk = goodix52xd_get_tls_psk;
 
   dev_class->id = "goodixtls52xd";
   dev_class->full_name = "Goodix TLS Fingerprint Sensor 52XD";
