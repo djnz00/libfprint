@@ -29,6 +29,7 @@
 #define GOODIX_FLAGS_MSG_PROTOCOL (0xa0)
 #define GOODIX_FLAGS_TLS (0xb0)
 #define GOODIX_FLAGS_TLS_DATA (0xb2)
+#define GOODIX_TLS_DATA_PREFIX_LEN (9)
 
 #define GOODIX_CMD_NOP (0x00)
 #define GOODIX_CMD_MCU_GET_IMAGE (0x20)
@@ -148,3 +149,7 @@ gboolean goodix_decode_protocol(const guint8 *data, guint32 data_len, guint8 *cm
                                 guint8 **payload, guint16 *payload_len,
                                 gboolean *valid_checksum,
                                 gboolean *valid_null_checksum);
+
+gboolean goodix_decode_tls_data(const guint8 *payload, guint16 payload_len,
+                                const guint8 **tls_data,
+                                guint16 *tls_data_len);

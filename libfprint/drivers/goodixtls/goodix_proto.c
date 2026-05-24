@@ -160,3 +160,21 @@ gboolean goodix_decode_protocol(const guint8 *data, guint32 data_len, guint8 *cm
 
   return TRUE;
 }
+
+gboolean goodix_decode_tls_data(const guint8 *payload, guint16 payload_len,
+                                const guint8 **tls_data,
+                                guint16 *tls_data_len) {
+  if (tls_data) *tls_data = NULL;
+  if (tls_data_len) *tls_data_len = 0;
+
+  if (!payload || !tls_data || !tls_data_len)
+    return FALSE;
+
+  if (payload_len <= GOODIX_TLS_DATA_PREFIX_LEN)
+    return FALSE;
+
+  *tls_data = payload + GOODIX_TLS_DATA_PREFIX_LEN;
+  *tls_data_len = payload_len - GOODIX_TLS_DATA_PREFIX_LEN;
+
+  return TRUE;
+}

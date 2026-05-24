@@ -404,15 +404,19 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
 
     case GOODIX_FLAGS_TLS_DATA:
         fp_dbg("Got TLS data msg");
-        if (payload_len < 9) {
+        const guint8 *tls_data = NULL;
+        guint16 tls_data_len = 0;
+
+        if (!goodix_decode_tls_data(payload, payload_len, &tls_data,
+                                    &tls_data_len)) {
             g_autoptr(GError) error = NULL;
             g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                         "Invalid Goodix TLS data length: %d", payload_len);
             goodix_receive_done(dev, NULL, 0, g_steal_pointer(&error));
             break;
         }
-        // GOODIX 52xd: Remove first 9 to get valid TLS content
-        goodix_receive_done(dev, payload+9, payload_len-9, NULL);
+
+        goodix_receive_done(dev, (guint8 *) tls_data, tls_data_len, NULL);
         break;
 
     default:
@@ -1182,11 +1186,26 @@ static void on_goodix_tls_read_handshake(FpDevice* dev, guint8* data,
     FpiDeviceGoodixTlsPrivate* priv =
         fpi_device_goodixtls_get_instance_private(self);
 
+    if (length == 0) {
+        fpi_ssm_mark_failed(ssm,
+                            g_error_new_literal(G_IO_ERROR,
+                                                G_IO_ERROR_INVALID_DATA,
+                                                "empty TLS fragment from device"));
+        return;
+    }
+
     int sent = goodix_tls_client_send(priv->tls_hop, data, length);
     if (sent < 0) {
         fpi_ssm_mark_failed(ssm, g_error_new(g_io_error_quark(), sent,
                                              "failed to sent data to "
                                              "tls server"));
+        return;
+    }
+    if (sent != length) {
+        fpi_ssm_mark_failed(ssm,
+                            g_error_new(G_IO_ERROR, G_IO_ERROR_FAILED,
+                                        "short TLS write to server: %d of %d",
+                                        sent, length));
         return;
     }
     fpi_ssm_next_state(ssm);
@@ -1238,7 +1257,7 @@ static void tls_handshake_run(FpiSsm* ssm, FpDevice* dev)
     if (stage == TLS_HANDSHAKE_STAGE_HELLO_S) {
         guint8 buff[1024];
         int size = goodix_tls_client_recv(priv->tls_hop, buff, sizeof(buff));
-        if (size < 0) {
+        if (size <= 0) {
             fpi_ssm_mark_failed(ssm, g_error_new(g_io_error_quark(), size,
                                                  "failed to read tls server "
                                                  "hello"));
@@ -1260,7 +1279,7 @@ static void tls_handshake_run(FpiSsm* ssm, FpDevice* dev)
         fp_dbg("Reading to proxy back");
         guint8 buff[1024];
         int size = goodix_tls_client_recv(priv->tls_hop, buff, sizeof(buff));
-        if (size < 0) {
+        if (size <= 0) {
             fpi_ssm_mark_failed(ssm, g_error_new(g_io_error_quark(), size,
                                                  "failed to read server "
                                                  "handshake"));
@@ -1306,7 +1325,23 @@ static void on_goodix_request_tls_connection(FpDevice* dev, guint8* data,
     FpiDeviceGoodixTlsPrivate* priv =
         fpi_device_goodixtls_get_instance_private(self);
 
-    goodix_tls_client_send(priv->tls_hop, data, length);
+    if (length == 0) {
+        ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
+            dev, priv->tls_ready_callback->user_data,
+            g_error_new_literal(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                "empty TLS connection request from device"));
+        return;
+    }
+
+    int sent = goodix_tls_client_send(priv->tls_hop, data, length);
+    if (sent != length) {
+        ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
+            dev, priv->tls_ready_callback->user_data,
+            g_error_new(G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "failed to forward TLS connection request: %d of %d",
+                        sent, length));
+        return;
+    }
 
     do_tls_handshake(dev);
 }
@@ -1385,7 +1420,23 @@ static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,
     FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(dev);
     FpiDeviceGoodixTlsPrivate* priv =
         fpi_device_goodixtls_get_instance_private(self);
-    goodix_tls_client_send(priv->tls_hop, data, length);
+    if (length == 0) {
+        callback(dev, NULL, 0, cb_info->user_data,
+                 g_error_new_literal(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                     "empty TLS image response from device"));
+        g_free(cb_info);
+        return;
+    }
+
+    int sent = goodix_tls_client_send(priv->tls_hop, data, length);
+    if (sent != length) {
+        callback(dev, NULL, 0, cb_info->user_data,
+                 g_error_new(G_IO_ERROR, G_IO_ERROR_FAILED,
+                             "failed to forward TLS image response: %d of %d",
+                             sent, length));
+        g_free(cb_info);
+        return;
+    }
 
     const guint16 size = 7684;
     guint8* buff = g_malloc(size);
