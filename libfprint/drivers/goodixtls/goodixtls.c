@@ -51,21 +51,24 @@ static unsigned int tls_server_psk_server_callback(SSL *ssl,
                                                    const char *identity,
                                                    unsigned char *psk,
                                                    unsigned int max_psk_len) {
-  if (sizeof(goodix_511_psk_0) > max_psk_len) {
-    fp_dbg("Provided PSK R is too long for OpenSSL");
+  static const guint8 fallback_zero_psk[32] = { 0 };
+  GoodixTlsServer *self = SSL_get_app_data(ssl);
+  const guint8 *selected_psk = fallback_zero_psk;
+  guint16 selected_psk_len = sizeof(fallback_zero_psk);
+
+  if (self && self->psk && self->psk_len) {
+    selected_psk = self->psk;
+    selected_psk_len = self->psk_len;
+  }
+
+  fp_dbg("PSK WANTED %d", max_psk_len);
+  if (selected_psk_len > max_psk_len) {
+    fp_dbg("Provided PSK is too long for OpenSSL");
     return 0;
   }
-  fp_dbg("PSK WANTED %d", max_psk_len);
-  // I don't know why we must use OPENSSL_hexstr2buf but just copying zeros
-  // doesn't work
-  const char* buff = "000000000000000000000000000000000000000000000000000000000"
-                     "0000000";
-  long len = 0;
-  unsigned char* key = OPENSSL_hexstr2buf(buff, &len);
-  memcpy(psk, key, len);
-  OPENSSL_free(key);
 
-  return len;
+  memcpy(psk, selected_psk, selected_psk_len);
+  return selected_psk_len;
 }
 
 static SSL_CTX* tls_server_create_ctx(void)
@@ -183,6 +186,7 @@ gboolean goodix_tls_server_init(GoodixTlsServer* self, GError** error)
         return FALSE;
     }
     tls_config_ssl(self->ssl_layer);
+    SSL_set_app_data(self->ssl_layer, self);
     SSL_set_fd(self->ssl_layer, self->sock_fd);
 
     pthread_create(&self->serve_thread, 0, goodix_tls_init_serve, self);

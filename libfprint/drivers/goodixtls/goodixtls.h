@@ -25,12 +25,6 @@
 
 #define GOODIX_TLS_SERVER_PORT 4433
 
-// static const guint8 goodix_511_psk_0[64] = {0};
-static const guint8 goodix_511_psk_0[] = {
-    0xba, 0x1a, 0x86, 0x03, 0x7c, 0x1d, 0x3c, 0x71, 0xc3, 0xaf, 0x34,
-    0x49, 0x55, 0xbd, 0x69, 0xa9, 0xa9, 0x86, 0x1d, 0x9e, 0x91, 0x1f,
-    0xa2, 0x49, 0x85, 0xb6, 0x77, 0xe8, 0xdb, 0xd7, 0x2d, 0x43};
-
 struct _GoodixTlsServer;
 
 typedef void (*GoodixTlsServerSendCallback)(struct _GoodixTlsServer* self,
@@ -62,6 +56,8 @@ typedef struct _GoodixTlsServer {
 
     // Put what you need here.
     gpointer user_data; // Passed to all callbacks
+    const guint8* psk;
+    guint16 psk_len;
     SSL_CTX* ssl_ctx;
     int sock_fd;
     SSL* ssl_layer;

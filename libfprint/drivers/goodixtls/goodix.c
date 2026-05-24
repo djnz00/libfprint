@@ -55,6 +55,8 @@ typedef struct {
 
     GCancellable* transfer_cancel_tkn;
     gboolean inited;
+    guint8* tls_psk;
+    guint16 tls_psk_len;
 } FpiDeviceGoodixTlsPrivate;
 
 G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE(FpiDeviceGoodixTls, fpi_device_goodixtls,
@@ -1361,14 +1363,72 @@ void goodix_tls_complete(FpiSsm *ssm, FpDevice *dev, GError *error) {
   fpi_image_device_activate_complete(FP_IMAGE_DEVICE(dev), error);
 }
 
+static gboolean
+goodix_tls_set_psk_from_hex (FpiDeviceGoodixTlsPrivate *priv,
+                             const gchar               *hex,
+                             GError                   **error)
+{
+    gsize hex_len;
+    gsize psk_len;
+    guint8 *psk;
+
+    if (!hex || !*hex)
+        return TRUE;
+
+    hex_len = strlen (hex);
+    if (hex_len % 2 || hex_len > G_MAXUINT16 * 2) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "Invalid Goodix TLS PSK hex length");
+        return FALSE;
+    }
+
+    psk_len = hex_len / 2;
+    if (psk_len == 0) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                     "Goodix TLS PSK hex is empty");
+        return FALSE;
+    }
+
+    psk = g_malloc (psk_len);
+    for (gsize i = 0; i < psk_len; i++) {
+        gint hi = g_ascii_xdigit_value (hex[i * 2]);
+        gint lo = g_ascii_xdigit_value (hex[i * 2 + 1]);
+
+        if (hi < 0 || lo < 0) {
+            g_free (psk);
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                         "Invalid Goodix TLS PSK hex character");
+            return FALSE;
+        }
+
+        psk[i] = (hi << 4) | lo;
+    }
+
+    g_free (priv->tls_psk);
+    priv->tls_psk = psk;
+    priv->tls_psk_len = (guint16) psk_len;
+    fp_dbg ("Using Goodix TLS PSK override with length %" G_GSIZE_FORMAT,
+            psk_len);
+    return TRUE;
+}
+
 void goodix_tls(FpDevice* dev, GoodixNoneCallback callback, gpointer user_data)
 {
     fp_dbg("Starting up goodix tls server");
     FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(dev);
+    FpiDeviceGoodixTlsClass* gx_class = FPI_DEVICE_GOODIXTLS_GET_CLASS(self);
     FpiDeviceGoodixTlsPrivate* priv =
         fpi_device_goodixtls_get_instance_private(self);
+    GError* err = NULL;
+
+    if (!goodix_tls_set_psk_from_hex(
+            priv, g_getenv ("LIBFPRINT_GOODIXTLS_PSK_HEX"), &err)) {
+        callback (dev, user_data, err);
+        return;
+    }
+
     g_assert(priv->tls_hop == NULL);
-    priv->tls_hop = malloc(sizeof(GoodixTlsServer));
+    priv->tls_hop = g_new0(GoodixTlsServer, 1);
 
     if (!priv->tls_ready_callback) {
         priv->tls_ready_callback = malloc(sizeof(GoodixCallbackInfo));
@@ -1376,13 +1436,20 @@ void goodix_tls(FpDevice* dev, GoodixNoneCallback callback, gpointer user_data)
     priv->tls_ready_callback->callback = G_CALLBACK(callback);
     priv->tls_ready_callback->user_data = user_data;
     GoodixTlsServer* s = priv->tls_hop;
+    if (priv->tls_psk && priv->tls_psk_len) {
+        s->psk = priv->tls_psk;
+        s->psk_len = priv->tls_psk_len;
+    } else if (gx_class->get_tls_psk) {
+        s->psk = gx_class->get_tls_psk(dev, &s->psk_len);
+    }
     s->connection_callback = on_goodix_tls_server_ready;
     s->user_data = self;
-    GError* err = NULL;
     if (!goodix_tls_server_init(priv->tls_hop, &err)) {
         fp_err("failed to init tls server, error: %s, code: %d", err->message,
                err->code);
         g_clear_pointer(&priv->tls_hop, g_free);
+        g_clear_pointer(&priv->tls_psk, g_free);
+        priv->tls_psk_len = 0;
         ((GoodixNoneCallback) priv->tls_ready_callback->callback)(
             dev, priv->tls_ready_callback->user_data, err);
         return;
@@ -1401,8 +1468,12 @@ gboolean goodix_shutdown_tls(FpDevice* dev, GError** error)
         gboolean rs = goodix_tls_server_deinit(priv->tls_hop, error);
         g_free(priv->tls_hop);
         priv->tls_hop = NULL;
+        g_clear_pointer(&priv->tls_psk, g_free);
+        priv->tls_psk_len = 0;
         return rs;
     }
+    g_clear_pointer(&priv->tls_psk, g_free);
+    priv->tls_psk_len = 0;
     return TRUE;
 }
 static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,

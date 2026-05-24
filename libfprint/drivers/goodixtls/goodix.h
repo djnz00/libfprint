@@ -33,6 +33,7 @@ struct _FpiDeviceGoodixTlsClass {
   gint interface;
   guint8 ep_in;
   guint8 ep_out;
+  const guint8 *(*get_tls_psk) (FpDevice *dev, guint16 *length);
 };
 
 typedef struct __attribute__((__packed__)) _GoodixCallbackInfo {

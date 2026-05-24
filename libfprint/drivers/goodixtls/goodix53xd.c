@@ -94,6 +94,15 @@ static void check_none(FpDevice *dev, gpointer user_data, GError *error) {
   fpi_ssm_next_state(user_data);
 }
 
+static const guint8 *
+goodix53xd_get_tls_psk (FpDevice *dev, guint16 *length)
+{
+  if (length)
+    *length = sizeof (goodix_53xd_psk_0);
+
+  return goodix_53xd_psk_0;
+}
+
 static void check_firmware_version(FpDevice *dev, gchar *firmware,
                                    gpointer user_data, GError *error) {
   if (error) {
@@ -779,6 +788,7 @@ static void fpi_device_goodixtls53xd_class_init(
   gx_class->interface = GOODIX_53XD_INTERFACE;
   gx_class->ep_in = GOODIX_53XD_EP_IN;
   gx_class->ep_out = GOODIX_53XD_EP_OUT;
+  gx_class->get_tls_psk = goodix53xd_get_tls_psk;
 
   dev_class->id = "goodixtls53xd";
   dev_class->full_name = "Goodix TLS Fingerprint Sensor 53XD";
