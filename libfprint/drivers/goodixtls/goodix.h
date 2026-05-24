@@ -138,6 +138,8 @@ void goodix_send_protocol(FpDevice *dev, guint8 cmd, guint8 *payload,
 void goodix_send_nop(FpDevice *dev, GoodixNoneCallback callback,
                      gpointer user_data);
 
+gboolean goodix_send_nop_wakeup(FpDevice *dev, GError **error);
+
 void goodix_send_mcu_get_image(FpDevice *dev, guint8* payload, guint16 length, GoodixImageCallback callback,
                                gpointer user_data);
 

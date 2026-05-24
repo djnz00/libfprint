@@ -35,6 +35,8 @@
 #include "goodix_proto.h"
 #include "goodixtls.h"
 
+#define GOODIX_TLS_IMAGE_MAX_PLAINTEXT_SIZE (16 * 1024)
+
 typedef struct {
     GoodixTlsServer* tls_hop;
 
@@ -259,13 +261,17 @@ void goodix_receive_ack(FpDevice *dev, guint8 *data, guint16 length,
   guint8 cmd;
 
   if (length != sizeof(GoodixAck)) {
-    fp_warn("Invalid ACK length: %d", length);
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Invalid ACK length: %d", length));
     return;
   }
 
   if (!ack->always_true) {
-    // Warn about error.
-    fp_warn("Invalid ACK flags: 0x%02x", data[sizeof(guint8)]);
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Invalid ACK flags: 0x%02x",
+                                    data[sizeof(guint8)]));
     return;
   }
 
@@ -274,17 +280,22 @@ void goodix_receive_ack(FpDevice *dev, guint8 *data, guint16 length,
   if (ack->has_no_config) fp_warn("MCU has no config");
 
   if (priv->cmd != cmd) {
-    fp_warn("Invalid ACK command: 0x%02x", cmd);
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Unexpected ACK command 0x%02x while waiting for 0x%02x",
+                                    cmd, priv->cmd));
     return;
   }
 
   if (!priv->ack) {
-    fp_warn("Didn't excpect an ACK for command: 0x%02x", priv->cmd);
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Unexpected ACK for command: 0x%02x",
+                                    priv->cmd));
     return;
   }
 
   if (!priv->reply) {
-      G_DEBUG_HERE();
       goodix_receive_done(dev, NULL, 0, NULL);
       return;
   }
@@ -340,11 +351,20 @@ void goodix_receive_protocol(FpDevice *dev, guint8 *data, guint32 length) {
   }
 
   if (!priv->reply) {
-    fp_warn("Didn't excpect a reply for command: 0x%02x", priv->cmd);
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Unexpected reply for command: 0x%02x",
+                                    priv->cmd));
     return;
   }
 
-  if (priv->ack) fp_warn("Didn't got ACK for command: 0x%02x", priv->cmd);
+  if (priv->ack) {
+    goodix_receive_done(dev, NULL, 0,
+                        g_error_new(G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                    "Reply for command 0x%02x arrived before ACK",
+                                    priv->cmd));
+    return;
+  }
 
   goodix_receive_done(dev, payload, payload_len, NULL);
 }
@@ -561,11 +581,19 @@ void goodix_send_protocol(
   guint8* data;
   guint32 data_len;
 
+    /* ACKs only carry the command byte, so overlapping transactions cannot be
+     * matched reliably. Keep every ACKed protocol command strictly serialized.
+     */
     if (priv->ack || priv->reply || priv->timeout) {
-        // A command is already running.
-        fp_warn("A command is already running: 0x%02x", priv->cmd);
+        g_autoptr(GError) busy_error = NULL;
+
+        g_set_error(&busy_error, G_IO_ERROR, G_IO_ERROR_BUSY,
+                    "Cannot send command 0x%02x while command 0x%02x is in flight",
+                    cmd, priv->cmd);
         if (free_func)
             free_func(payload);
+        if (callback)
+            callback(dev, NULL, 0, user_data, g_steal_pointer(&busy_error));
         return;
     }
 
@@ -593,25 +621,34 @@ void goodix_send_protocol(
 }
 void goodix_send_nop(FpDevice *dev, GoodixNoneCallback callback,
                      gpointer user_data) {
+  GError *error = NULL;
+
+  goodix_send_nop_wakeup(dev, &error);
+  if (callback)
+    callback(dev, user_data, error);
+  else
+    g_clear_error(&error);
+}
+
+gboolean goodix_send_nop_wakeup(FpDevice *dev, GError **error) {
+  FpiDeviceGoodixTls* self = FPI_DEVICE_GOODIXTLS(dev);
+  FpiDeviceGoodixTlsPrivate* priv =
+      fpi_device_goodixtls_get_instance_private(self);
   GoodixNop payload = {.unknown = 0x00000000};
-  GoodixCallbackInfo *cb_info;
+  guint8 *data;
+  guint32 data_len;
 
-  if (callback) {
-    cb_info = malloc(sizeof(GoodixCallbackInfo));
-
-    cb_info->callback = G_CALLBACK(callback);
-    cb_info->user_data = user_data;
-
-    goodix_send_protocol(dev, GOODIX_CMD_NOP, (guint8 *)&payload,
-                         sizeof(payload), NULL, FALSE, GOODIX_TIMEOUT, FALSE,
-                         goodix_receive_none, cb_info);
-    goodix_receive_done(dev, NULL, 0, NULL);
-    return;
+  if (priv->ack || priv->reply || priv->timeout) {
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_BUSY,
+                "Cannot send NOP wakeup while command 0x%02x is in flight",
+                priv->cmd);
+    return FALSE;
   }
 
-  goodix_send_protocol(dev, GOODIX_CMD_NOP, (guint8 *)&payload, sizeof(payload),
-                       NULL, FALSE, GOODIX_TIMEOUT, FALSE, NULL, NULL);
-  goodix_receive_done(dev, NULL, 0, NULL);
+  goodix_encode_protocol(GOODIX_CMD_NOP, (guint8 *)&payload, sizeof(payload),
+                         FALSE, FALSE, &data, &data_len);
+  return goodix_send_pack(dev, GOODIX_FLAGS_MSG_PROTOCOL, data, data_len,
+                          g_free, error);
 }
 
 void goodix_send_mcu_get_image(FpDevice* dev, guint8* payload, guint16 length, GoodixImageCallback callback,
@@ -1557,7 +1594,7 @@ static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,
         return;
     }
 
-    const guint16 size = 7684;
+    const guint32 size = GOODIX_TLS_IMAGE_MAX_PLAINTEXT_SIZE;
     guint8* buff = g_malloc(size);
     GError* err = NULL;
     int read_size = goodix_tls_server_receive(priv->tls_hop, buff, size, &err);
@@ -1568,7 +1605,12 @@ static void goodix_tls_ready_image_handler(FpDevice* dev, guint8* data,
         return;
     }
 
-    callback(dev, buff, read_size, cb_info->user_data, NULL);
+    if (read_size >= (int) size)
+        fp_warn("TLS image response filled maximum buffer; frame may be truncated");
+
+    fp_dbg("Decrypted TLS image response length: %d", read_size);
+    callback(dev, buff, (guint16) read_size, cb_info->user_data, NULL);
+    g_free(buff);
     g_free(cb_info);
 }
 

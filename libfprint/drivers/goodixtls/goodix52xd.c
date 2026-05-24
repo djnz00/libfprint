@@ -348,12 +348,16 @@ static void activate_run_state(FpiSsm* ssm, FpDevice* dev)
 {
 
     switch (fpi_ssm_get_cur_state(ssm)) {
-    case ACTIVATE_READ_AND_NOP:
-        // Nop seems to clear the previous command buffer. But we are
-        // unable to do so.
+    case ACTIVATE_READ_AND_NOP: {
+        GError* error = NULL;
+        if (!goodix_send_nop_wakeup(dev, &error)) {
+            fpi_ssm_mark_failed(ssm, error);
+            break;
+        }
         goodix_start_read_loop(dev);
-        goodix_send_nop(dev, check_none, ssm);
+        fpi_ssm_next_state_delayed(ssm, 50);
         break;
+    }
 
     case ACTIVATE_ENABLE_CHIP:
       goodix_send_enable_chip(dev, TRUE, check_none, ssm);
@@ -738,6 +742,7 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
 
         fpi_do_movement_estimation(&assembly_ctx, frames);
         FpImage* img = fpi_assemble_frames(&assembly_ctx, frames);
+        img->flags |= FPI_IMAGE_PARTIAL;
 
         g_slist_free_full(frames, g_free);
         g_slist_free_full(self->frames, g_free);

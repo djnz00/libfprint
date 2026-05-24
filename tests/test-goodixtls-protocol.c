@@ -279,6 +279,125 @@ test_decode_tls_data_rejects_short_payload (void)
   g_assert_cmpuint (tls_data_len, ==, 0);
 }
 
+static void
+assert_protocol_encoding (guint8        cmd,
+                          const guint8 *payload,
+                          guint16       payload_len,
+                          const guint8 *expected,
+                          guint32       expected_len)
+{
+  g_autofree guint8 *encoded = NULL;
+  guint32 encoded_len = 0;
+
+  goodix_encode_protocol (cmd, payload, payload_len, TRUE, FALSE, &encoded,
+                          &encoded_len);
+
+  g_assert_cmpuint (encoded_len, ==, expected_len);
+  g_assert_cmpmem (encoded, encoded_len, expected, expected_len);
+}
+
+static void
+assert_padded_protocol_pack_prefix (guint8        cmd,
+                                    const guint8 *payload,
+                                    guint16       payload_len,
+                                    const guint8 *expected,
+                                    guint32       expected_len)
+{
+  g_autofree guint8 *protocol = NULL;
+  g_autofree guint8 *pack = NULL;
+  guint32 protocol_len = 0;
+  guint32 pack_len = 0;
+
+  goodix_encode_protocol (cmd, payload, payload_len, TRUE, FALSE, &protocol,
+                          &protocol_len);
+  goodix_encode_pack (GOODIX_FLAGS_MSG_PROTOCOL, protocol, protocol_len, TRUE,
+                      &pack, &pack_len);
+
+  g_assert_cmpuint (pack_len, ==, GOODIX_EP_OUT_MAX_BUF_SIZE);
+  g_assert_cmpuint (expected_len, <=, pack_len);
+  g_assert_cmpmem (pack, expected_len, expected, expected_len);
+}
+
+static void
+test_encode_windows_10034_control_commands (void)
+{
+  const guint8 zero_payload[] = { 0x00, 0x00 };
+  const guint8 drv_state_payload[] = { 0x01, 0x00 };
+  const guint8 expected_d0[] = { GOODIX_CMD_REQUEST_TLS_CONNECTION, 0x03, 0x00,
+                                 0x00, 0x00, 0xd7 };
+  const guint8 expected_c4[] = { GOODIX_CMD_SET_DRV_STATE, 0x03, 0x00,
+                                 0x01, 0x00, 0xe2 };
+  const guint8 expected_d2[] = { GOODIX_CMD_TLS_IMAGE_OR_DATA, 0x03, 0x00,
+                                 0x00, 0x00, 0xd5 };
+  const guint8 expected_c4_pack_prefix[] = {
+    GOODIX_FLAGS_MSG_PROTOCOL, 0x06, 0x00, 0xa6,
+    GOODIX_CMD_SET_DRV_STATE,  0x03, 0x00, 0x01, 0x00, 0xe2,
+  };
+  const guint8 expected_d2_pack_prefix[] = {
+    GOODIX_FLAGS_MSG_PROTOCOL, 0x06, 0x00, 0xa6,
+    GOODIX_CMD_TLS_IMAGE_OR_DATA, 0x03, 0x00, 0x00, 0x00, 0xd5,
+  };
+
+  assert_protocol_encoding (GOODIX_CMD_REQUEST_TLS_CONNECTION, zero_payload,
+                            sizeof (zero_payload), expected_d0,
+                            sizeof (expected_d0));
+  assert_protocol_encoding (GOODIX_CMD_SET_DRV_STATE, drv_state_payload,
+                            sizeof (drv_state_payload), expected_c4,
+                            sizeof (expected_c4));
+  assert_protocol_encoding (GOODIX_CMD_TLS_IMAGE_OR_DATA, zero_payload,
+                            sizeof (zero_payload), expected_d2,
+                            sizeof (expected_d2));
+
+  assert_padded_protocol_pack_prefix (GOODIX_CMD_SET_DRV_STATE,
+                                      drv_state_payload,
+                                      sizeof (drv_state_payload),
+                                      expected_c4_pack_prefix,
+                                      sizeof (expected_c4_pack_prefix));
+  assert_padded_protocol_pack_prefix (GOODIX_CMD_TLS_IMAGE_OR_DATA,
+                                      zero_payload, sizeof (zero_payload),
+                                      expected_d2_pack_prefix,
+                                      sizeof (expected_d2_pack_prefix));
+}
+
+static void
+test_encode_windows_10034_scan_commands (void)
+{
+  const guint8 image_payload[] = {
+    0x01, 0x03, 0x33, 0x01, 0x2d, 0x01, 0x33, 0x01, 0x2d, 0x01,
+  };
+  const guint8 fdt_payload[] = {
+    0x0d, 0x01, 0x33, 0x01, 0x2d, 0x01, 0x33, 0x01, 0x2d,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+  };
+  const guint8 expected_image[] = {
+    GOODIX_CMD_MCU_GET_IMAGE, 0x0b, 0x00, 0x01, 0x03, 0x33, 0x01,
+    0x2d, 0x01, 0x33, 0x01, 0x2d, 0x01, 0xb7,
+  };
+  const guint8 expected_fdt_prefix[] = {
+    GOODIX_CMD_MCU_SWITCH_TO_FDT_MODE, 0x1c, 0x00, 0x0d, 0x01,
+    0x33, 0x01, 0x2d, 0x01, 0x33, 0x01, 0x2d, 0x01,
+  };
+  g_autofree guint8 *encoded_fdt = NULL;
+  guint32 encoded_fdt_len = 0;
+
+  assert_protocol_encoding (GOODIX_CMD_MCU_GET_IMAGE, image_payload,
+                            sizeof (image_payload), expected_image,
+                            sizeof (expected_image));
+
+  goodix_encode_protocol (GOODIX_CMD_MCU_SWITCH_TO_FDT_MODE, fdt_payload,
+                          sizeof (fdt_payload), TRUE, FALSE, &encoded_fdt,
+                          &encoded_fdt_len);
+  g_assert_cmpuint (encoded_fdt_len, ==,
+                    sizeof (GoodixProtocol) + sizeof (fdt_payload) + 1);
+  g_assert_cmpmem (encoded_fdt, sizeof (expected_fdt_prefix),
+                   expected_fdt_prefix, sizeof (expected_fdt_prefix));
+  g_assert_cmpuint (encoded_fdt[encoded_fdt_len - 2], ==, 0x01);
+  g_assert_cmpuint (encoded_fdt[encoded_fdt_len - 1], ==,
+                    (guint8) (0xaa - goodix_calc_checksum (
+                                      encoded_fdt, encoded_fdt_len - 1)));
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -310,6 +429,10 @@ main (int argc, char *argv[])
                    test_decode_tls_data_strips_prefix);
   g_test_add_func ("/goodixtls/protocol/decode-tls-data-short-payload",
                    test_decode_tls_data_rejects_short_payload);
+  g_test_add_func ("/goodixtls/protocol/encode-windows-10034-control-commands",
+                   test_encode_windows_10034_control_commands);
+  g_test_add_func ("/goodixtls/protocol/encode-windows-10034-scan-commands",
+                   test_encode_windows_10034_scan_commands);
 
   return g_test_run ();
 }
