@@ -38,6 +38,29 @@ typedef struct _VerifyData
 } VerifyData;
 
 static void
+on_finger_status_changed (FpDevice    *dev,
+                          GParamSpec  *pspec,
+                          gpointer     user_data)
+{
+  VerifyData *verify_data = user_data;
+  FpFingerStatusFlags status = fp_device_get_finger_status (dev);
+  const char *finger = verify_data->finger == FP_FINGER_UNKNOWN
+                         ? "selected"
+                         : finger_to_string (verify_data->finger);
+
+  (void) pspec;
+
+  if (status & FP_FINGER_STATUS_PRESENT)
+    g_print ("\n>>> SENSOR: finger detected; keep your %s finger still.\n", finger);
+  else if (status & FP_FINGER_STATUS_NEEDED)
+    g_print ("\n>>> ACTION: place your %s finger on the sensor now.\n", finger);
+  else
+    g_print ("\n>>> SENSOR: no finger detected; lift your finger if it is still on the sensor.\n");
+
+  fflush (stdout);
+}
+
+static void
 verify_data_free (VerifyData *verify_data)
 {
   g_clear_handle_id (&verify_data->sigint_handler, g_source_remove);
@@ -101,6 +124,7 @@ on_verify_completed (FpDevice *dev, GAsyncResult *res, void *user_data)
     }
 
   g_print ("Verify again? [Y/n]? ");
+  fflush (stdout);
   if (fgets (buffer, sizeof (buffer), stdin) &&
       (buffer[0] == 'Y' || buffer[0] == 'y' || buffer[0] == '\n'))
     {
@@ -233,6 +257,7 @@ on_list_completed (FpDevice *dev, GAsyncResult *res, gpointer user_data)
                fp_print_get_description (verify_print));
 
       g_print ("Print loaded. Time to verify!\n");
+      fflush (stdout);
       fp_device_verify (dev, verify_print, verify_data->cancellable,
                         on_match_cb, verify_data, NULL,
                         (GAsyncReadyCallback) on_verify_completed,
@@ -280,6 +305,7 @@ start_verification (FpDevice *dev, VerifyData *verify_data)
         }
 
       g_print ("Print loaded. Time to verify!\n");
+      fflush (stdout);
       fp_device_verify (dev, verify_print, verify_data->cancellable,
                         on_match_cb, verify_data, NULL,
                         (GAsyncReadyCallback) on_verify_completed,
@@ -347,6 +373,9 @@ main (void)
   verify_data->ret_value = EXIT_FAILURE;
   verify_data->loop = g_main_loop_new (NULL, FALSE);
   verify_data->cancellable = g_cancellable_new ();
+  g_signal_connect (dev, "notify::finger-status",
+                    G_CALLBACK (on_finger_status_changed),
+                    verify_data);
   verify_data->sigint_handler = g_unix_signal_add_full (G_PRIORITY_HIGH,
                                                         SIGINT,
                                                         sigint_cb,

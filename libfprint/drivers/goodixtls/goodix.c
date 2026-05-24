@@ -638,6 +638,54 @@ void goodix_send_mcu_get_image(FpDevice* dev, guint8* payload, guint16 length, G
                          NULL, NULL);
 }
 
+void goodix_send_tls_image_or_data(FpDevice *dev,
+                                   GoodixDefaultCallback callback,
+                                   gpointer user_data)
+{
+  guint8 payload[2] = {0, 0};
+  GoodixCallbackInfo *cb_info;
+
+  if (callback) {
+    cb_info = malloc(sizeof(GoodixCallbackInfo));
+
+    cb_info->callback = G_CALLBACK(callback);
+    cb_info->user_data = user_data;
+
+    goodix_send_protocol(dev, GOODIX_CMD_TLS_IMAGE_OR_DATA, payload,
+                         sizeof(payload), NULL, TRUE, GOODIX_TIMEOUT, TRUE,
+                         goodix_receive_default, cb_info);
+    return;
+  }
+
+  goodix_send_protocol(dev, GOODIX_CMD_TLS_IMAGE_OR_DATA, payload,
+                       sizeof(payload), NULL, TRUE, GOODIX_TIMEOUT, TRUE, NULL,
+                       NULL);
+}
+
+void goodix_send_set_drv_state(FpDevice *dev, guint16 state,
+                               GoodixNoneCallback callback,
+                               gpointer user_data)
+{
+  guint8 payload[2] = {state & 0xff, state >> 8};
+  GoodixCallbackInfo *cb_info;
+
+  if (callback) {
+    cb_info = malloc(sizeof(GoodixCallbackInfo));
+
+    cb_info->callback = G_CALLBACK(callback);
+    cb_info->user_data = user_data;
+
+    goodix_send_protocol(dev, GOODIX_CMD_SET_DRV_STATE, payload,
+                         sizeof(payload), NULL, TRUE, GOODIX_TIMEOUT, FALSE,
+                         goodix_receive_none, cb_info);
+    return;
+  }
+
+  goodix_send_protocol(dev, GOODIX_CMD_SET_DRV_STATE, payload,
+                       sizeof(payload), NULL, TRUE, GOODIX_TIMEOUT, FALSE,
+                       NULL, NULL);
+}
+
 void goodix_send_mcu_switch_to_fdt_down(FpDevice *dev, guint8 *mode,
                                         guint16 length, gboolean reply,
                                         GDestroyNotify free_func,

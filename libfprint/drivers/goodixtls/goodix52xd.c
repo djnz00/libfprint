@@ -324,6 +324,26 @@ static void read_otp_callback(FpDevice* dev, guint8* data, guint16 len,
     fpi_ssm_next_state(ssm);
 }
 
+static void goodix52xd_send_upload_config(FpDevice *dev,
+                                          GoodixSuccessCallback callback,
+                                          gpointer user_data)
+{
+    FpiDeviceGoodixTls52XD* self = FPI_DEVICE_GOODIXTLS52XD(dev);
+    guint8 config[sizeof(goodix_52xd_config)];
+
+    memcpy(config, goodix_52xd_config, sizeof(config));
+
+    if (self->firmware_10034) {
+        /* Captured Windows 10034 config adjusts two parameters and checksum. */
+        config[175] = 0xef;
+        config[235] = 0xe2;
+        config[255] = 0x0f;
+    }
+
+    goodix_send_upload_config_mcu(dev, config, sizeof(config), NULL,
+                                  callback, user_data);
+}
+
 static void activate_run_state(FpiSsm* ssm, FpDevice* dev)
 {
 
@@ -365,9 +385,7 @@ static void activate_run_state(FpiSsm* ssm, FpDevice* dev)
         break;
 
     case ACTIVATE_SET_MCU_CONFIG:
-        goodix_send_upload_config_mcu(dev, goodix_52xd_config,
-                                      sizeof(goodix_52xd_config), NULL,
-                                      check_config_upload, ssm);
+        goodix52xd_send_upload_config(dev, check_config_upload, ssm);
         break;
     }
 }
@@ -404,12 +422,43 @@ static void activate_complete(FpiSsm* ssm, FpDevice* dev, GError* error)
 // ---- SCAN SECTION START ----
 
 enum SCAN_STAGES {
+    SCAN_STAGE_WINDOWS_10034_UPLOAD_CONFIG,
+    SCAN_STAGE_WINDOWS_10034_SET_DRV_STATE,
+    SCAN_STAGE_WINDOWS_10034_PRIME,
     SCAN_STAGE_SWITCH_TO_FDT_DOWN,
     SCAN_STAGE_SWITCH_TO_FDT_MODE,
     SCAN_STAGE_GET_IMG,
 
     SCAN_STAGE_NUM,
 };
+
+static void goodix52xd_check_scan_preamble(FpDevice* dev, gboolean success,
+                                           gpointer ssm, GError* err)
+{
+    if (err) {
+        fpi_ssm_mark_failed(ssm, err);
+        return;
+    }
+
+    if (!success) {
+        fpi_ssm_mark_failed(
+            ssm, fpi_device_error_new(FP_DEVICE_ERROR_GENERAL));
+        return;
+    }
+
+    fpi_ssm_next_state(ssm);
+}
+
+static void goodix52xd_check_none_scan_preamble(FpDevice* dev,
+                                                gpointer ssm, GError* err)
+{
+    if (err) {
+        fpi_ssm_mark_failed(ssm, err);
+        return;
+    }
+
+    fpi_ssm_next_state(ssm);
+}
 
 static void goodix52xd_windows_register_reset_complete(FpDevice* dev,
                                                        gpointer user_data,
@@ -505,9 +554,9 @@ static gboolean decode_frame(Goodix52xdPix frame[GOODIX52XD_FRAME_SIZE],
 
     if (length < GOODIX52XD_PACKED_FRAME_SIZE) {
         g_set_error(error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_DATA_INVALID,
-                    "Image frame is too short (got %d, expected %d or %d)",
-                    length, GOODIX52XD_PACKED_FRAME_SIZE,
-                    GOODIX52XD_LE16_FRAME_SIZE);
+                    "Image frame is too short (got %u, expected %u or %u)",
+                    (guint) length, (guint) GOODIX52XD_PACKED_FRAME_SIZE,
+                    (guint) GOODIX52XD_LE16_FRAME_SIZE);
         return FALSE;
     }
 
@@ -776,6 +825,31 @@ guint8 fdt_switch_state_down_52xd[] = {
     0x00, 0xa3, 0x00, 0x00
 };
 
+static void goodix52xd_windows_prime_done(FpDevice* dev, guint8* data,
+                                          guint16 len, gpointer ssm,
+                                          GError* err)
+{
+    if (err) {
+        fpi_ssm_mark_failed(ssm, err);
+        return;
+    }
+
+    if (len == 1) {
+        fp_dbg("Windows 10034 prime status: 0x%02x", data[0]);
+        fpi_ssm_next_state(ssm);
+        return;
+    }
+
+    if (len != 1 && len != GOODIX52XD_LE16_FRAME_SIZE)
+        fp_warn("Windows 10034 prime returned unexpected length: %u",
+                (guint) len);
+
+    if (len == GOODIX52XD_LE16_FRAME_SIZE)
+        fpi_image_device_report_finger_status(FP_IMAGE_DEVICE(dev), TRUE);
+
+    fpi_ssm_next_state(ssm);
+}
+
 static void goodix52xd_windows_fdt_mode_done(FpDevice* dev, guint8* data,
                                              guint16 len, gpointer ssm,
                                              GError* err)
@@ -808,6 +882,7 @@ static void goodix52xd_windows_fdt_mode_ack(FpDevice* dev, guint8* data,
     guint8 payload[27];
 
     goodix52xd_fill_windows_10034_fdt_payload(self, payload);
+    payload[26] = 0x01;
     goodix_send_mcu_switch_to_fdt_mode(
         dev, payload, sizeof(payload), TRUE, NULL,
         goodix52xd_windows_fdt_mode_done, ssm);
@@ -819,6 +894,37 @@ static void scan_run_state(FpiSsm* ssm, FpDevice* dev)
     FpiDeviceGoodixTls52XD* self = FPI_DEVICE_GOODIXTLS52XD(img_dev);
 
     switch (fpi_ssm_get_cur_state(ssm)) {
+
+    case SCAN_STAGE_WINDOWS_10034_UPLOAD_CONFIG:
+        if (self->firmware_10034) {
+            goodix52xd_send_upload_config(dev, goodix52xd_check_scan_preamble,
+                                          ssm);
+            break;
+        }
+
+        fpi_ssm_next_state(ssm);
+        break;
+
+    case SCAN_STAGE_WINDOWS_10034_SET_DRV_STATE:
+        if (self->firmware_10034) {
+            goodix_send_set_drv_state(dev, 1,
+                                      goodix52xd_check_none_scan_preamble,
+                                      ssm);
+            break;
+        }
+
+        fpi_ssm_next_state(ssm);
+        break;
+
+    case SCAN_STAGE_WINDOWS_10034_PRIME:
+        if (self->firmware_10034) {
+            goodix_send_tls_image_or_data(dev, goodix52xd_windows_prime_done,
+                                          ssm);
+            break;
+        }
+
+        fpi_ssm_next_state(ssm);
+        break;
 
     case SCAN_STAGE_SWITCH_TO_FDT_MODE:
         goodix_send_mcu_switch_to_fdt_mode(dev, (guint8*) fdt_switch_state_mode_52xd,
@@ -832,7 +938,7 @@ static void scan_run_state(FpiSsm* ssm, FpDevice* dev)
 
             goodix52xd_fill_windows_10034_fdt_payload(self, payload);
             goodix_send_mcu_switch_to_fdt_mode(
-                dev, payload, sizeof(payload), TRUE, NULL,
+                dev, payload, sizeof(payload), FALSE, NULL,
                 goodix52xd_windows_fdt_mode_ack, ssm);
             break;
         }
@@ -1007,7 +1113,6 @@ static void fpi_device_goodixtls52xd_class_init(
 
   dev_class->scan_type = FP_SCAN_TYPE_PRESS;
 
-  // TODO
   img_dev_class->bz3_threshold = 24;
   img_dev_class->img_width = GOODIX52XD_WIDTH;
   img_dev_class->img_height = GOODIX52XD_HEIGHT;

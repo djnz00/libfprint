@@ -39,6 +39,27 @@ typedef struct _EnrollData
 } EnrollData;
 
 static void
+on_finger_status_changed (FpDevice    *dev,
+                          GParamSpec  *pspec,
+                          gpointer     user_data)
+{
+  EnrollData *enroll_data = user_data;
+  FpFingerStatusFlags status = fp_device_get_finger_status (dev);
+  const char *finger = finger_to_string (enroll_data->finger);
+
+  (void) pspec;
+
+  if (status & FP_FINGER_STATUS_PRESENT)
+    g_print ("\n>>> SENSOR: finger detected; keep your %s finger still.\n", finger);
+  else if (status & FP_FINGER_STATUS_NEEDED)
+    g_print ("\n>>> ACTION: place your %s finger on the sensor now.\n", finger);
+  else
+    g_print ("\n>>> SENSOR: no finger detected; lift your finger if it is still on the sensor.\n");
+
+  fflush (stdout);
+}
+
+static void
 enroll_data_free (EnrollData *enroll_data)
 {
   g_clear_handle_id (&enroll_data->sigint_handler, g_source_remove);
@@ -193,6 +214,7 @@ on_device_opened (FpDevice *dev, GAsyncResult *res, void *user_data)
           "complete the process.\n\n", finger_to_string (enroll_data->finger),
           fp_device_get_nr_enroll_stages (dev));
   printf ("Scan your finger now.\n");
+  fflush (stdout);
 
   print_template = print_create_template (dev, enroll_data->finger, enroll_data->update_fingerprint);
   fp_device_enroll (dev, print_template, enroll_data->cancellable,
@@ -256,6 +278,9 @@ main (void)
   enroll_data->ret_value = EXIT_FAILURE;
   enroll_data->loop = g_main_loop_new (NULL, FALSE);
   enroll_data->cancellable = g_cancellable_new ();
+  g_signal_connect (dev, "notify::finger-status",
+                    G_CALLBACK (on_finger_status_changed),
+                    enroll_data);
   enroll_data->sigint_handler = g_unix_signal_add_full (G_PRIORITY_HIGH,
                                                         SIGINT,
                                                         sigint_cb,

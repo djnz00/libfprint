@@ -141,6 +141,14 @@ void goodix_send_nop(FpDevice *dev, GoodixNoneCallback callback,
 void goodix_send_mcu_get_image(FpDevice *dev, guint8* payload, guint16 length, GoodixImageCallback callback,
                                gpointer user_data);
 
+void goodix_send_tls_image_or_data(FpDevice *dev,
+                                   GoodixDefaultCallback callback,
+                                   gpointer user_data);
+
+void goodix_send_set_drv_state(FpDevice *dev, guint16 state,
+                               GoodixNoneCallback callback,
+                               gpointer user_data);
+
 void goodix_send_mcu_switch_to_fdt_down(FpDevice *dev, guint8 *mode,
                                         guint16 length, gboolean reply,
                                         GDestroyNotify free_func,
