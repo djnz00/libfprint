@@ -168,6 +168,14 @@ fp_image_device_enroll_maybe_await_finger_on (FpImageDevice *self)
   fp_image_device_change_state (self, FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_ON);
 }
 
+static gboolean
+fp_image_device_enroll_complete (FpImageDevice *self)
+{
+  FpImageDevicePrivate *priv = fp_image_device_get_instance_private (self);
+
+  return priv->enroll_stage == fp_device_get_nr_enroll_stages (FP_DEVICE (self));
+}
+
 static void
 fp_image_device_maybe_complete_action (FpImageDevice *self, GError *error)
 {
@@ -306,10 +314,14 @@ fpi_image_device_minutiae_detected (GObject *source_object, GAsyncResult *res, g
                                   g_steal_pointer (&print), error);
 
       /* Start another scan or deactivate. */
-      if (priv->enroll_stage == fp_device_get_nr_enroll_stages (device))
+      if (fp_image_device_enroll_complete (self))
         {
           fp_image_device_maybe_complete_action (self, g_steal_pointer (&error));
-          fpi_image_device_deactivate (self, FALSE);
+
+          if (priv->state == FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF)
+            fp_dbg ("Final enroll image accepted; waiting for finger removal before deactivating");
+          else
+            fpi_image_device_deactivate (self, FALSE);
         }
       else
         {
@@ -455,6 +467,8 @@ fpi_image_device_report_finger_status (FpImageDevice *self,
       fp_image_device_change_state (self, FPI_IMAGE_DEVICE_STATE_IDLE);
 
       if (action != FPI_DEVICE_ACTION_ENROLL)
+        fpi_image_device_deactivate (self, FALSE);
+      else if (fp_image_device_enroll_complete (self))
         fpi_image_device_deactivate (self, FALSE);
       else
         fp_image_device_enroll_maybe_await_finger_on (self);

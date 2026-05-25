@@ -254,9 +254,17 @@ class VirtualImage(unittest.TestCase):
 
         self.assertEqual(self.dev.get_finger_status(), FPrint.FingerStatusFlags.NEEDED)
 
+        self.send_finger_automatic(False)
+        self.assertEqual(self.dev.get_finger_status(), FPrint.FingerStatusFlags.NEEDED)
+        self.send_finger_report(True)
         self.send_image(image)
+        while self._step < 5:
+            ctx.iteration(True)
+        self.assertIsNone(self._enrolled)
+        self.send_finger_report(False)
         while self._enrolled is None:
             ctx.iteration(True)
+        self.send_finger_automatic(True)
 
         self.assertEqual(self.dev.get_finger_status(), FPrint.FingerStatusFlags.NONE)
         self.assertEqual(self._enrolled.props.driver, self.dev.get_driver())

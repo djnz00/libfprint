@@ -19,8 +19,10 @@
 
 #pragma once
 
-// 1 seconds USB timeout
-#define GOODIX_TIMEOUT (1000)
+// 1 second command timeout by default; GOODIX_TLS_TIMEOUT_MS may override it
+// for slow instrumentation runs such as valgrind.
+guint goodix_timeout_ms(void);
+#define GOODIX_TIMEOUT (goodix_timeout_ms())
 
 G_DECLARE_DERIVABLE_TYPE(FpiDeviceGoodixTls, fpi_device_goodixtls, FPI,
                          DEVICE_GOODIXTLS, FpImageDevice)
@@ -39,6 +41,7 @@ struct _FpiDeviceGoodixTlsClass {
 typedef struct __attribute__((__packed__)) _GoodixCallbackInfo {
   GCallback callback;
   gpointer user_data;
+  GDestroyNotify user_data_destroy;
 } GoodixCallbackInfo;
 
 typedef void (*GoodixCmdCallback)(FpDevice *dev, guint8 *data, guint16 length,
@@ -156,6 +159,13 @@ void goodix_send_mcu_switch_to_fdt_down(FpDevice *dev, guint8 *mode,
                                         GDestroyNotify free_func,
                                         GoodixDefaultCallback callback,
                                         gpointer user_data);
+
+void goodix_send_mcu_switch_to_fdt_down_timeout(FpDevice *dev, guint8 *mode,
+                                                guint16 length, gboolean reply,
+                                                GDestroyNotify free_func,
+                                                guint timeout_ms,
+                                                GoodixDefaultCallback callback,
+                                                gpointer user_data);
 
 void goodix_send_mcu_switch_to_fdt_up(FpDevice *dev, guint8 *mode,
                                       guint16 length, gboolean reply, GDestroyNotify free_func,

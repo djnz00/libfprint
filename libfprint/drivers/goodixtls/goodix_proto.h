@@ -78,7 +78,7 @@ typedef struct __attribute__((__packed__)) _GoodixNop {
 
 typedef struct __attribute__((__packed__)) _GoodixMcuSwitchToIdleMode {
   guint8 sleep_time;
-  guint8 : 8;
+  guint8 reserved;
 } GoodixMcuSwitchToIdleMode;
 
 typedef struct __attribute__((__packed__)) _GoodixWriteSensorRegister {
@@ -91,7 +91,7 @@ typedef struct __attribute__((__packed__)) _GoodixReadSensorRegister {
   guint8 multiples;
   guint16 address;
   guint8 length;
-  guint8 : 8;
+  guint8 reserved;
 } GoodixReadSensorRegister;
 
 typedef struct __attribute__((__packed__)) _GoodixSetPowerdownScanFrequency {
@@ -100,13 +100,13 @@ typedef struct __attribute__((__packed__)) _GoodixSetPowerdownScanFrequency {
 
 typedef struct __attribute__((__packed__)) _GoodixEnableChip {
   guint8 enable;
-  guint8 : 8;
+  guint8 reserved;
 } GoodixEnableChip;
 
 typedef struct __attribute__((__packed__)) _GoodixReset {
   guint8 reset_sensor : 1;
   guint8 soft_reset_mcu : 1;
-  guint8 : 6;
+  guint8 reserved : 6;
   guint8 sleep_time;
 } GoodixReset;
 
@@ -127,11 +127,11 @@ typedef struct __attribute__((__packed__)) _GoodixPresetPskResponse {
 
 typedef struct __attribute__((__packed__)) _GoodixDefault {
   guint8 unused_flags;
-  guint8 : 8;
+  guint8 reserved;
 } GoodixDefault;
 
 typedef struct __attribute__((__packed__)) _GoodixNone {
-  guint16 : 16;
+  guint16 reserved;
 } GoodixNone;
 
 guint8 goodix_calc_checksum(const guint8 *data, guint32 length);
