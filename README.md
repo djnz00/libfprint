@@ -19,6 +19,56 @@
 
 </div>
 
+## Goodix TLS fork status
+
+This fork carries the Goodix TLS driver family used for current 52xd/521d
+Linux interoperability work. The active production target is the Goodix
+`27c6:521d` USB reader using stock `GFUSB_GM168SEC_APP_10034` firmware through
+the `goodixtls52xd` driver. The tree also keeps the related `goodixtls511` and
+`goodixtls53xd` drivers wired into the default driver set.
+
+The 521d path is intended to work without setting an external
+`LIBFPRINT_GOODIXTLS_PSK_HEX` value for the stock 10034 firmware. Firmware
+dumping, flashing, or provisioning experiments are outside the libfprint
+runtime path and should stay in companion tooling.
+
+## Build and test this fork
+
+For a focused Goodix 52xd build:
+
+```sh
+meson setup build -Ddrivers=goodixtls52xd
+ninja -C build
+meson test -C build --print-errorlogs
+```
+
+For the default driver build:
+
+```sh
+meson setup build-default -Ddrivers=default
+ninja -C build-default
+meson test -C build-default --print-errorlogs
+```
+
+Useful focused checks for the Goodix TLS work are:
+
+```sh
+meson test -C build goodixtls52xd-frame goodixtls-protocol --print-errorlogs
+```
+
+The synthetic enroll/verify soak is intentionally biometric-free and uses the
+virtual-device test path:
+
+```sh
+meson setup build-synthetic -Ddrivers=virtual_device,virtual_device_storage
+ninja -C build-synthetic
+FP_SYNTHETIC_SOAK_ITERATIONS=20 meson test -C build-synthetic \
+  'VirtualDevice.test_enroll_verify_soak' --print-errorlogs
+```
+
+Hardware-in-the-loop testing requires a real finger and must keep raw captures,
+logs, enrolled-print artifacts, and biometric images out of git.
+
 ## History
 
 **LibFPrint** was originally developed as part of an
