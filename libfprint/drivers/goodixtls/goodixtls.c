@@ -31,6 +31,7 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include "drivers_api.h"
 #include "fp-device.h"
@@ -38,6 +39,8 @@
 #include "glibconfig.h"
 #include "goodix.h"
 #include "goodixtls.h"
+
+#define GOODIX_TLS_CIPHER_LIST "PSK-AES128-CBC-SHA256"
 
 static GError* err_from_ssl(void)
 {
@@ -51,24 +54,21 @@ static unsigned int tls_server_psk_server_callback(SSL *ssl,
                                                    const char *identity,
                                                    unsigned char *psk,
                                                    unsigned int max_psk_len) {
-  static const guint8 fallback_zero_psk[32] = { 0 };
   GoodixTlsServer *self = SSL_get_app_data(ssl);
-  const guint8 *selected_psk = fallback_zero_psk;
-  guint16 selected_psk_len = sizeof(fallback_zero_psk);
 
-  if (self && self->psk && self->psk_len) {
-    selected_psk = self->psk;
-    selected_psk_len = self->psk_len;
+  if (!self || !self->psk || !self->psk_len) {
+    fp_dbg("Goodix TLS PSK is not configured");
+    return 0;
   }
 
   fp_dbg("PSK WANTED %d", max_psk_len);
-  if (selected_psk_len > max_psk_len) {
+  if (self->psk_len > max_psk_len) {
     fp_dbg("Provided PSK is too long for OpenSSL");
     return 0;
   }
 
-  memcpy(psk, selected_psk, selected_psk_len);
-  return selected_psk_len;
+  memcpy(psk, self->psk, self->psk_len);
+  return self->psk_len;
 }
 
 static SSL_CTX* tls_server_create_ctx(void)
@@ -85,14 +85,28 @@ static SSL_CTX* tls_server_create_ctx(void)
     return ctx;
 }
 
-static void tls_server_config_ctx(SSL_CTX* ctx)
+static void
+goodix_tls_close_fd(int *fd)
+{
+    if (*fd >= 0) {
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+static gboolean tls_server_config_ctx(SSL_CTX* ctx, GError** error)
 {
     SSL_CTX_set_ecdh_auto(ctx, 1);
     SSL_CTX_set_dh_auto(ctx, 1);
-    SSL_CTX_set_cipher_list(ctx, "ALL");
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_psk_server_callback(ctx, tls_server_psk_server_callback);
+    if (SSL_CTX_set_cipher_list(ctx, GOODIX_TLS_CIPHER_LIST) != 1) {
+        *error = err_from_ssl();
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 int goodix_tls_client_send(GoodixTlsServer* self, guint8* data, guint16 length)
@@ -113,23 +127,33 @@ int goodix_tls_server_receive(GoodixTlsServer* self, guint8* data,
     return retr;
 }
 
-static void tls_config_ssl(SSL* ssl)
+static gboolean tls_config_ssl(SSL* ssl, GError** error)
 {
     SSL_set_min_proto_version(ssl, TLS1_2_VERSION);
     SSL_set_max_proto_version(ssl, TLS1_2_VERSION);
     SSL_set_psk_server_callback(ssl, tls_server_psk_server_callback);
-    SSL_set_cipher_list(ssl, "ALL");
+    if (SSL_set_cipher_list(ssl, GOODIX_TLS_CIPHER_LIST) != 1) {
+        *error = err_from_ssl();
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 static void* goodix_tls_init_serve(void* me)
 {
     GoodixTlsServer* self = me;
+    g_autoptr(GError) error = NULL;
 
     fp_dbg("TLS server waiting to accept...");
     int retr = SSL_accept(self->ssl_layer);
     fp_dbg("TLS server accept done");
+    if (g_atomic_int_get(&self->shutting_down))
+        return NULL;
+
     if (retr <= 0) {
-        self->connection_callback(self, err_from_ssl(), self->user_data);
+        error = err_from_ssl();
+        self->connection_callback(self, error, self->user_data);
     }
     else {
         self->connection_callback(self, NULL, self->user_data);
@@ -139,20 +163,58 @@ static void* goodix_tls_init_serve(void* me)
 
 gboolean goodix_tls_server_deinit(GoodixTlsServer* self, GError** error)
 {
-    SSL_shutdown(self->ssl_layer);
-    SSL_free(self->ssl_layer);
+    gboolean success = TRUE;
 
-    close(self->client_fd);
-    close(self->sock_fd);
+    g_atomic_int_set(&self->shutting_down, TRUE);
 
-    SSL_CTX_free(self->ssl_ctx);
+    if (self->client_fd >= 0)
+        shutdown(self->client_fd, SHUT_RDWR);
+    if (self->sock_fd >= 0)
+        shutdown(self->sock_fd, SHUT_RDWR);
 
-    return TRUE;
+    if (g_atomic_int_get(&self->serve_thread_started)) {
+        gint ret = pthread_join(self->serve_thread, NULL);
+
+        if (ret != 0) {
+            g_set_error(error, G_IO_ERROR, g_io_error_from_errno(ret),
+                        "failed to join Goodix TLS server thread: %s",
+                        g_strerror(ret));
+            success = FALSE;
+        }
+        g_atomic_int_set(&self->serve_thread_started, FALSE);
+    }
+
+    if (self->ssl_layer) {
+        SSL_shutdown(self->ssl_layer);
+        SSL_free(self->ssl_layer);
+        self->ssl_layer = NULL;
+    }
+
+    goodix_tls_close_fd(&self->client_fd);
+    goodix_tls_close_fd(&self->sock_fd);
+
+    if (self->ssl_ctx) {
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
+    }
+
+    return success;
 }
 
 gboolean goodix_tls_server_init(GoodixTlsServer* self, GError** error)
 {
     g_assert(self->connection_callback);
+    self->sock_fd = -1;
+    self->client_fd = -1;
+    g_atomic_int_set(&self->shutting_down, FALSE);
+    g_atomic_int_set(&self->serve_thread_started, FALSE);
+
+    if (!self->psk || !self->psk_len) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Goodix TLS PSK is not configured");
+        return FALSE;
+    }
+
     SSL_load_error_strings();
     OpenSSL_add_ssl_algorithms();
     SSL_library_init();
@@ -163,7 +225,11 @@ gboolean goodix_tls_server_init(GoodixTlsServer* self, GError** error)
                                           "Unable to create TLS server context");
         return FALSE;
     }
-    tls_server_config_ctx(self->ssl_ctx);
+    if (!tls_server_config_ctx(self->ssl_ctx, error)) {
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
+        return FALSE;
+    }
 
     int socks[2] = {0, 0};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, socks) != 0) {
@@ -179,17 +245,38 @@ gboolean goodix_tls_server_init(GoodixTlsServer* self, GError** error)
     self->ssl_layer = SSL_new(self->ssl_ctx);
     if (self->ssl_layer == NULL) {
         *error = err_from_ssl();
-        close(self->client_fd);
-        close(self->sock_fd);
+        goodix_tls_close_fd(&self->client_fd);
+        goodix_tls_close_fd(&self->sock_fd);
         SSL_CTX_free(self->ssl_ctx);
         self->ssl_ctx = NULL;
         return FALSE;
     }
-    tls_config_ssl(self->ssl_layer);
+    if (!tls_config_ssl(self->ssl_layer, error)) {
+        SSL_free(self->ssl_layer);
+        self->ssl_layer = NULL;
+        goodix_tls_close_fd(&self->client_fd);
+        goodix_tls_close_fd(&self->sock_fd);
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
+        return FALSE;
+    }
     SSL_set_app_data(self->ssl_layer, self);
     SSL_set_fd(self->ssl_layer, self->sock_fd);
 
-    pthread_create(&self->serve_thread, 0, goodix_tls_init_serve, self);
+    gint ret = pthread_create(&self->serve_thread, 0, goodix_tls_init_serve, self);
+    if (ret != 0) {
+        g_set_error(error, G_IO_ERROR, g_io_error_from_errno(ret),
+                    "failed to start Goodix TLS server thread: %s",
+                    g_strerror(ret));
+        SSL_free(self->ssl_layer);
+        self->ssl_layer = NULL;
+        goodix_tls_close_fd(&self->client_fd);
+        goodix_tls_close_fd(&self->sock_fd);
+        SSL_CTX_free(self->ssl_ctx);
+        self->ssl_ctx = NULL;
+        return FALSE;
+    }
+    g_atomic_int_set(&self->serve_thread_started, TRUE);
 
     return TRUE;
 }

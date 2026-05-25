@@ -3387,6 +3387,25 @@ test_driver_retry_error_types (void)
   g_test_assert_expected_messages ();
 }
 
+static void
+test_print_deserialize_invalid_short (void)
+{
+  const guchar short_data[] = { 'F', 'P' };
+  const guchar header_only[] = { 'F', 'P', '3' };
+  g_autoptr(GError) error = NULL;
+
+  g_assert_null (fp_print_deserialize (NULL, 0, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  g_assert_null (fp_print_deserialize (short_data, sizeof (short_data), &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  g_assert_null (fp_print_deserialize (header_only, sizeof (header_only), &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -3482,6 +3501,7 @@ main (int argc, char *argv[])
   g_test_add_func ("/driver/cancel/fail", test_driver_cancel_fail);
 
   g_test_add_func ("/driver/critical", test_driver_critical);
+  g_test_add_func ("/print/deserialize/invalid_short", test_print_deserialize_invalid_short);
 
   g_test_add_func ("/driver/get_current_action", test_driver_current_action);
   g_test_add_func ("/driver/get_current_action/open", test_driver_current_action_open);

@@ -151,8 +151,6 @@ static void check_reset(FpDevice *dev, gboolean success, guint16 number,
 static void check_preset_psk_read(FpDevice *dev, gboolean success,
                                   guint32 flags, guint8 *psk, guint16 length,
                                   gpointer user_data, GError *error) {
-  g_autofree gchar *psk_str = data_to_str(psk, length);
-
   if (error) {
     fpi_ssm_mark_failed(user_data, error);
     return;
@@ -165,7 +163,7 @@ static void check_preset_psk_read(FpDevice *dev, gboolean success,
     return;
   }
 
-  fp_dbg("Device PSK: 0x%s", psk_str);
+  fp_dbg("Device PSK length: %d", length);
   fp_dbg("Device PSK flags: 0x%08x", flags);
 
   if (flags != GOODIX_511_PSK_FLAGS) {
@@ -177,14 +175,14 @@ static void check_preset_psk_read(FpDevice *dev, gboolean success,
 
   if (length != sizeof(goodix_511_psk_0)) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                "Invalid device PSK: 0x%s", psk_str);
+                "Invalid device PSK length: %d", length);
     fpi_ssm_mark_failed(user_data, error);
     return;
   }
 
   if (memcmp(psk, goodix_511_psk_0, sizeof(goodix_511_psk_0))) {
     g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                "Invalid device PSK: 0x%s", psk_str);
+                "Device PSK does not match expected value");
     fpi_ssm_mark_failed(user_data, error);
     return;
   }

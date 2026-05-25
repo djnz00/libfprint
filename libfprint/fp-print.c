@@ -776,8 +776,8 @@ fp_print_deserialize (const guchar *data,
   const gchar *device_id;
   gboolean device_stored;
 
-  g_assert (data);
-  g_assert (length > 3);
+  if (!data || length <= 3)
+    goto invalid_format;
 
   if (memcmp (data, "FP3", 3) != 0)
     goto invalid_format;

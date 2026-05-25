@@ -30,6 +30,7 @@
 #include "gusb/gusb-device.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #define FP_COMPONENT "goodixtls52xd"
 
 #include <glib.h>
@@ -80,13 +81,24 @@ static gchar *
 goodix52xd_debug_dump_path(const gchar *name, const gchar *extension)
 {
     const gchar *dir = g_getenv("GOODIX52XD_DUMP_DIR");
+    GStatBuf st;
     guint seq;
 
     if (!dir || !*dir)
         return NULL;
 
+    if (g_strcmp0(g_getenv("GOODIX52XD_DUMP_RAW"), "1") != 0)
+        return NULL;
+
     if (g_mkdir_with_parents(dir, 0700) < 0) {
         fp_warn("failed to create Goodix 52xd dump directory: %s", dir);
+        return NULL;
+    }
+
+    if (g_stat(dir, &st) < 0 || !S_ISDIR(st.st_mode) ||
+        (st.st_mode & 077) != 0) {
+        fp_warn("refusing to dump Goodix 52xd frames into non-private directory: %s",
+                dir);
         return NULL;
     }
 
@@ -115,7 +127,9 @@ goodix52xd_debug_dump_raw_frame(const Goodix52xdPix frame[GOODIX52XD_FRAME_SIZE]
         g_string_append_len(out, (const gchar *) &pix, sizeof(pix));
     }
 
-    if (!g_file_set_contents(path, out->str, out->len, &error))
+    if (!g_file_set_contents_full(path, out->str, out->len,
+                                  G_FILE_SET_CONTENTS_CONSISTENT, 0600,
+                                  &error))
         fp_warn("failed to dump Goodix 52xd raw frame: %s", error->message);
 
     g_string_free(out, TRUE);
@@ -135,7 +149,9 @@ goodix52xd_debug_dump_image(FpImage *img)
     g_string_append_printf(out, "P5\n%d %d\n255\n", img->width, img->height);
     g_string_append_len(out, (const gchar *) img->data, img->width * img->height);
 
-    if (!g_file_set_contents(path, out->str, out->len, &error))
+    if (!g_file_set_contents_full(path, out->str, out->len,
+                                  G_FILE_SET_CONTENTS_CONSISTENT, 0600,
+                                  &error))
         fp_warn("failed to dump Goodix 52xd assembled image: %s", error->message);
 
     g_string_free(out, TRUE);

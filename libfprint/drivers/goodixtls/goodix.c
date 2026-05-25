@@ -1637,6 +1637,8 @@ void goodix_tls(FpDevice* dev, GoodixNoneCallback callback, gpointer user_data)
 
     g_assert(priv->tls_hop == NULL);
     priv->tls_hop = g_new0(GoodixTlsServer, 1);
+    priv->tls_hop->sock_fd = -1;
+    priv->tls_hop->client_fd = -1;
 
     if (!priv->tls_ready_callback) {
         priv->tls_ready_callback = g_new0(GoodixCallbackInfo, 1);

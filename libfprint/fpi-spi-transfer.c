@@ -41,8 +41,8 @@ static gsize block_size = 0;
  * Drivers should always use this API rather than calling read/write/ioctl on
  * the spidev device.
  *
- * Setting G_MESSAGES_DEBUG and FP_DEBUG_TRANSFER will result in the message
- * content to be dumped.
+ * Setting G_MESSAGES_DEBUG and FP_DEBUG_TRANSFER logs transfer metadata.
+ * FP_DEBUG_TRANSFER_DATA=1 additionally dumps raw transfer contents.
  */
 
 
@@ -74,6 +74,8 @@ log_transfer (FpiSpiTransfer *transfer, gboolean submit, GError *error)
 {
   if (g_getenv ("FP_DEBUG_TRANSFER"))
     {
+      gboolean dump_data = g_strcmp0 (g_getenv ("FP_DEBUG_TRANSFER_DATA"), "1") == 0;
+
       if (submit)
         {
           g_debug ("Transfer %p submitted, write length %zd, read length %zd",
@@ -81,7 +83,7 @@ log_transfer (FpiSpiTransfer *transfer, gboolean submit, GError *error)
                    transfer->length_wr,
                    transfer->length_rd);
 
-          if (transfer->buffer_wr)
+          if (dump_data && transfer->buffer_wr)
             dump_buffer (transfer->buffer_wr, transfer->length_wr);
         }
       else
@@ -97,7 +99,7 @@ log_transfer (FpiSpiTransfer *transfer, gboolean submit, GError *error)
                    error_str,
                    transfer->length_wr,
                    transfer->length_rd);
-          if (transfer->buffer_rd)
+          if (dump_data && transfer->buffer_rd)
             dump_buffer (transfer->buffer_rd, transfer->length_rd);
         }
     }

@@ -30,6 +30,9 @@
  *
  * Drivers should use this API only rather than accessing the GUsbDevice
  * directly in most cases.
+ *
+ * Setting G_MESSAGES_DEBUG and FP_DEBUG_TRANSFER logs transfer metadata.
+ * FP_DEBUG_TRANSFER_DATA=1 additionally dumps raw transfer contents.
  */
 
 
@@ -40,6 +43,8 @@ log_transfer (FpiUsbTransfer *transfer, gboolean submit, GError *error)
 {
   if (g_getenv ("FP_DEBUG_TRANSFER"))
     {
+      gboolean dump_data = g_strcmp0 (g_getenv ("FP_DEBUG_TRANSFER_DATA"), "1") == 0;
+
       if (!submit)
         {
           g_autofree gchar *error_str = NULL;
@@ -63,7 +68,7 @@ log_transfer (FpiUsbTransfer *transfer, gboolean submit, GError *error)
                    transfer->endpoint);
         }
 
-      if (!submit == !!(transfer->endpoint & FPI_USB_ENDPOINT_IN))
+      if (dump_data && ((!submit) == !!(transfer->endpoint & FPI_USB_ENDPOINT_IN)))
         {
           g_autoptr(GString) line = NULL;
           gssize dump_len;

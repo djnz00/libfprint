@@ -39,12 +39,13 @@ run_logged() {
   local raw_dir="$iter_dir/raw-dump"
 
   mkdir -p "$raw_dir"
+  chmod 700 "$raw_dir"
   echo
   echo ">>> $name: prompts are live; follow the sensor instructions."
 
   # Use script(1) to keep prompts visible and capture the full terminal log.
   script -qefc \
-    "cd '$iter_dir' && printf '%b' '$input' | sudo -n env GOODIX52XD_DUMP_DIR='$raw_dir' ${common_env[*]} '$command'" \
+    "cd '$iter_dir' && printf '%b' '$input' | sudo -n env GOODIX52XD_DUMP_DIR='$raw_dir' GOODIX52XD_DUMP_RAW=1 ${common_env[*]} '$command'" \
     "$log"
 }
 
