@@ -3,6 +3,12 @@
 `umockdev` tests use fingerprint devices mocked by [`umockdev`
 toolchain][umockdev].
 
+Install `umockdev` before running the fixture-backed driver suite. On Arch:
+
+```sh
+sudo pacman -S --needed umockdev
+```
+
 This document describes how to create test cases (for USB devices). Many of
 these tests are tests for image devices, where a single image is captured
 and stored.
@@ -39,6 +45,35 @@ $ sudo tests/create-driver-test.py driver [variant]
 **Note.** To avoid submitting a real fingerprint when creating a 'capture' test,
 the side of finger, arm, or anything else producing an image with the device
 can be used.
+
+
+Synthetic Enroll/Verify Soak
+----------------------------
+
+The automated soak coverage must not use biometric-derived data. The
+`virtual_device` soak test uses only synthetic string print IDs and exercises
+repeated enrollment, match verification, no-match verification, and reopen
+boundaries through the public API:
+
+```sh
+meson setup build-synthetic -Ddrivers=virtual_device,virtual_device_storage
+ninja -C build-synthetic
+FP_SYNTHETIC_SOAK_ITERATIONS=20 meson test -C build-synthetic \
+  'VirtualDevice.test_enroll_verify_soak' --print-errorlogs
+```
+
+Hardware-in-the-loop Goodix soak is intentionally separate because it requires
+a real finger. It keeps prompts visible while logging terminal output and stores
+biometric artifacts under `arc/`:
+
+```sh
+GOODIX_HIL_SOAK_ITERATIONS=5 tests/goodix-hil-enroll-verify-soak.sh
+```
+
+Do not create new automated soak inputs from real fingerprint captures. Existing
+recorded driver fixtures remain driver-regression coverage; new acceptance
+coverage should prefer synthetic virtual-device data unless fixture provenance
+is explicitly non-biometric.
 
 
 Possible Issues

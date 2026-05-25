@@ -598,6 +598,40 @@ class VirtualDevice(VirtualDeviceBase):
         self.check_verify(matching, 'not-testprint', match=False,
             identify=self.dev.supports_identify())
 
+    def test_enroll_verify_soak(self):
+        # This is intentionally synthetic: virtual_device compares opaque print
+        # IDs, so no fingerprint image or biometric-derived fixture is involved.
+        iterations = int(os.environ.get('FP_SYNTHETIC_SOAK_ITERATIONS',
+            '3' if 'UNDER_VALGRIND' in os.environ else '12'))
+        fingers = [
+            FPrint.Finger.LEFT_THUMB,
+            FPrint.Finger.LEFT_INDEX,
+            FPrint.Finger.LEFT_MIDDLE,
+            FPrint.Finger.RIGHT_THUMB,
+            FPrint.Finger.RIGHT_INDEX,
+            FPrint.Finger.RIGHT_MIDDLE,
+        ]
+
+        self.assertGreater(iterations, 0)
+        self.assertLessEqual(iterations, 100)
+
+        for i in range(iterations):
+            nick = 'synthetic-soak-print-{}'.format(i)
+            mismatch = 'synthetic-soak-mismatch-{}'.format(i)
+            matching = self.enroll_print(nick, fingers[i % len(fingers)])
+
+            # Reopen between stages to stay close to the examples/enroll then
+            # examples/verify hardware flow.
+            self.dev.close_sync()
+            self.dev.open_sync()
+            self.check_verify(matching, nick, match=True,
+                identify=self.dev.supports_identify())
+
+            self.dev.close_sync()
+            self.dev.open_sync()
+            self.check_verify(matching, mismatch, match=False,
+                identify=self.dev.supports_identify())
+
     def test_enroll_verify_error(self):
         matching = self.enroll_print('testprint', FPrint.Finger.LEFT_RING)
 

@@ -96,6 +96,10 @@ if get_option('introspection')
     unittest_inspector = find_program('unittest_inspector.py')
     umockdev_test_name = 'umockdev-test.py'
     umockdev_test = find_program(umockdev_test_name)
+    umockdev_run = find_program('umockdev-run', required: false)
+    if not umockdev_run.found()
+        warning('umockdev-run not found; fixture-backed driver tests will skip')
+    endif
 
     foreach vdtest: virtual_devices_tests
         driver_name = '_'.join(vdtest.split('-'))
@@ -171,7 +175,8 @@ if get_option('introspection')
         driver_envs = envs
         driver_envs.set('FP_DRIVERS_ALLOWLIST', driver_name)
 
-        if (driver_name in supported_drivers and
+        if (umockdev_run.found() and
+            driver_name in supported_drivers and
             gusb_dep.version().version_compare('>= 0.3.0'))
             driver_tests_enabled = true
             test(driver_test,
