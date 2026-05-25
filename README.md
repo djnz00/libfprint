@@ -1,5 +1,3 @@
-
-
 <div align="center">
 
 # LibFPrint
@@ -28,9 +26,7 @@ the `goodixtls52xd` driver. The tree also keeps the related `goodixtls511` and
 `goodixtls53xd` drivers wired into the default driver set.
 
 The 521d path is intended to work without setting an external
-`LIBFPRINT_GOODIXTLS_PSK_HEX` value for the stock 10034 firmware. Firmware
-dumping, flashing, or provisioning experiments are outside the libfprint
-runtime path and should stay in companion tooling.
+`LIBFPRINT_GOODIXTLS_PSK_HEX` value for the stock 10034 firmware.
 
 ## Build and test this fork
 
@@ -110,7 +106,6 @@ being shipped in an open source project.
 
 </div>
 
-
 <!----------------------------------------------------------------------------->
 
 [Documentation]: https://fprint.freedesktop.org/libfprint-dev/
@@ -133,7 +128,6 @@ being shipped in an open source project.
 <!---------------------------------[ Badges ]---------------------------------->
 
 [Badge License]: https://img.shields.io/badge/License-LGPL2.1-015d93.svg?style=for-the-badge&labelColor=blue
-
 
 <!---------------------------------[ Buttons ]--------------------------------->
 
