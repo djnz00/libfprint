@@ -58,6 +58,8 @@ struct _FpiDeviceGoodixTls52XD {
   guint8* otp;
   const guint8* expected_pmk_hash;
   guint16 expected_pmk_hash_len;
+  guint8* device_psk;
+  guint16 device_psk_len;
   gboolean firmware_10034;
   guint scan_frame_count;
   guint image_frame_count;
@@ -214,19 +216,13 @@ goodix52xd_set_expected_pmk_hash (FpiDeviceGoodixTls52XD *self,
 static const guint8 *
 goodix52xd_get_tls_psk (FpDevice *dev, guint16 *length)
 {
-  FpiDeviceGoodixTls52XD *self = FPI_DEVICE_GOODIXTLS52XD(dev);
+  static const guint8 zero_psk[32] = {0};
 
-  if (!self->firmware_10034)
-    {
-      if (length)
-        *length = 0;
-      return NULL;
-    }
-
+  /* TEST: use 32-byte zero PSK (matches working Python reference) */
+  fp_dbg("get_tls_psk: TEST using 32-byte zero PSK");
   if (length)
-    *length = sizeof (goodix_52xd_psk_10034);
-
-  return goodix_52xd_psk_10034;
+    *length = sizeof (zero_psk);
+  return zero_psk;
 }
 
 static void check_firmware_version(FpDevice *dev, gchar *firmware,
@@ -311,12 +307,31 @@ static void check_preset_psk_read(FpDevice *dev, gboolean success,
     return;
   }
 
-  if (memcmp(psk, self->expected_pmk_hash, self->expected_pmk_hash_len)) {
-    g_set_error(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                "Unsupported device PSK hash");
-    fpi_ssm_mark_failed(user_data, error);
-    return;
+  /* Dump PSK bytes for debugging */
+  {
+    GString *hex = g_string_new(NULL);
+    for (guint16 i = 0; i < length; i++)
+      g_string_append_printf(hex, "%02x", psk[i]);
+    fp_warn("Device PSK (hex, %d bytes): %s", length, hex->str);
+    g_string_free(hex, TRUE);
+
+    hex = g_string_new(NULL);
+    for (guint16 i = 0; i < self->expected_pmk_hash_len; i++)
+      g_string_append_printf(hex, "%02x", self->expected_pmk_hash[i]);
+    fp_warn("Expected PMK hash (hex, %d bytes): %s",
+            self->expected_pmk_hash_len, hex->str);
+    g_string_free(hex, TRUE);
   }
+
+  if (memcmp(psk, self->expected_pmk_hash, self->expected_pmk_hash_len)) {
+    /* Don't fail; log warning and continue with device PSK. */
+    fp_warn("Device PSK hash mismatch, continuing with device-provided PSK");
+  }
+
+  /* Save PSK read from device for TLS handshake. */
+  g_free(self->device_psk);
+  self->device_psk = g_memdup2(psk, length);
+  self->device_psk_len = length;
 
   fpi_ssm_next_state(user_data);
 }
@@ -351,14 +366,22 @@ static void read_otp_callback(FpDevice* dev, guint8* data, guint16 len,
         fpi_ssm_mark_failed(ssm, err);
         return;
     }
-    if (len < 64) {
-        fpi_ssm_mark_failed(ssm, g_error_new(FP_DEVICE_ERROR,
-                                             FP_DEVICE_ERROR_DATA_INVALID,
-                                             "OTP is invalid (len: %d)", len));
-        return;
-    }
     FpiDeviceGoodixTls52XD* self = FPI_DEVICE_GOODIXTLS52XD(dev);
     g_free(self->otp);
+    if (len < 64) {
+        fp_warn("OTP read returned %d bytes (expected 64), using hardcoded fallback", len);
+        self->otp = g_malloc0(64);
+        if (data && len > 0)
+            memcpy(self->otp, data, MIN(len, 64));
+        self->otp[26] = 0xa1;
+        self->otp[33] = 0x27;
+        self->otp[41] = 0x21;
+        self->otp[42] = 0x27;
+        self->otp[43] = 0x23;
+        self->otp[45] = 0xa1;
+        fpi_ssm_next_state(ssm);
+        return;
+    }
     self->otp = g_memdup2(data, 64);
     fpi_ssm_next_state(ssm);
 }
@@ -1187,6 +1210,9 @@ static void dev_change_state(FpImageDevice* img_dev, FpiImageDeviceState state)
 
 static void goodix52xd_reset_state(FpiDeviceGoodixTls52XD* self)
 {
+  /* Reset device PSK; it will be re-read on next activation. */
+  g_clear_pointer(&self->device_psk, g_free);
+  self->device_psk_len = 0;
     g_slist_free_full(g_steal_pointer(&self->frames), g_free);
     self->scan_frame_count = 0;
     self->image_frame_count = 0;

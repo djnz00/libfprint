@@ -112,6 +112,18 @@ goodix52xd_frame_is_empty (const Goodix52xdPix frame[GOODIX52XD_FRAME_SIZE],
       local_stats.high_pixels <= GOODIX52XD_EMPTY_HIGH_PIXEL_MAX)
     return TRUE;
 
-  return (local_stats.mean >= GOODIX52XD_EMPTY_SATURATED_MEAN_MIN &&
-          local_stats.high_pixels >= GOODIX52XD_EMPTY_SATURATED_HIGH_PIXEL_MIN);
+  /* Saturated-empty thresholds are tunable per device via environment ports so
+   * a differently-calibrated unit can be adjusted without a rebuild.  Defaults
+   * are tuned for the 521d / firmware 10019 idle pattern (mean ~3895). */
+  guint sat_mean_min = GOODIX52XD_EMPTY_SATURATED_MEAN_MIN;
+  guint sat_high_min = GOODIX52XD_EMPTY_SATURATED_HIGH_PIXEL_MIN;
+  const gchar *e;
+
+  if ((e = g_getenv ("GOODIX52XD_EMPTY_SATURATED_MEAN_MIN")) != NULL)
+    sat_mean_min = g_ascii_strtoull (e, NULL, 10);
+  if ((e = g_getenv ("GOODIX52XD_EMPTY_SATURATED_HIGH_PIXEL_MIN")) != NULL)
+    sat_high_min = g_ascii_strtoull (e, NULL, 10);
+
+  return (local_stats.mean >= sat_mean_min &&
+          local_stats.high_pixels >= sat_high_min);
 }
